@@ -1,9 +1,8 @@
 /**
  * Session/Window switcher panel logic.
  */
-export function createSessionSwitcher({ panel, list, title, closeBtn, sessionsBtn, windowsBtn, currentLabel, onSwitch }) {
+export function createSessionSwitcher({ panel, list, title, closeBtn, sessionsBtn, windowsBtn, currentLabel, onSwitch, onNewWindow }) {
   let currentSession = '';
-  let mode = 'sessions'; // 'sessions' | 'windows'
 
   function hide() {
     panel.classList.add('hidden');
@@ -16,7 +15,6 @@ export function createSessionSwitcher({ panel, list, title, closeBtn, sessionsBt
   closeBtn.addEventListener('click', hide);
 
   sessionsBtn.addEventListener('click', async () => {
-    mode = 'sessions';
     title.textContent = 'Sessions';
     show();
     await loadSessions();
@@ -24,7 +22,6 @@ export function createSessionSwitcher({ panel, list, title, closeBtn, sessionsBt
 
   windowsBtn.addEventListener('click', async () => {
     if (!currentSession) return;
-    mode = 'windows';
     title.textContent = `Windows — ${currentSession}`;
     show();
     await loadWindows(currentSession);
@@ -43,14 +40,13 @@ export function createSessionSwitcher({ panel, list, title, closeBtn, sessionsBt
       for (const sess of data.sessions) {
         const li = document.createElement('li');
         li.innerHTML = `
-          <span>${sess.name} <small>(${sess.windows} win)</small></span>
+          <span>${esc(sess.name)} <small>(${sess.windows} win)</small></span>
           <span class="badge ${sess.attached ? 'attached' : ''}">${sess.attached ? 'attached' : 'detached'}</span>
         `;
-        li.addEventListener('click', async () => {
+        li.addEventListener('click', () => {
           setCurrentSession(sess.name);
-          mode = 'windows';
-          title.textContent = `Windows — ${sess.name}`;
-          await loadWindows(sess.name);
+          onSwitch(sess.name, null);
+          hide();
         });
         list.appendChild(li);
       }
@@ -65,14 +61,27 @@ export function createSessionSwitcher({ panel, list, title, closeBtn, sessionsBt
       const res = await fetch(`/api/windows/${encodeURIComponent(session)}`);
       const data = await res.json();
       list.innerHTML = '';
+
+      // "New Window" button at the top
+      const newWinLi = document.createElement('li');
+      newWinLi.className = 'switcher-new-window';
+      newWinLi.innerHTML = '<span>+ New Window</span>';
+      newWinLi.addEventListener('click', () => {
+        onNewWindow(session);
+        hide();
+      });
+      list.appendChild(newWinLi);
+
       if (data.windows.length === 0) {
-        list.innerHTML = '<li>No windows</li>';
+        const li = document.createElement('li');
+        li.textContent = 'No windows';
+        list.appendChild(li);
         return;
       }
       for (const win of data.windows) {
         const li = document.createElement('li');
         li.innerHTML = `
-          <span>${win.index}: ${win.name}</span>
+          <span>${win.index}: ${esc(win.name)}</span>
           <span class="badge ${win.active ? 'attached' : ''}">${win.active ? 'active' : ''}</span>
         `;
         li.addEventListener('click', () => {
@@ -92,4 +101,10 @@ export function createSessionSwitcher({ panel, list, title, closeBtn, sessionsBt
   }
 
   return { setCurrentSession, hide, show, loadSessions, loadWindows };
+}
+
+function esc(str) {
+  const el = document.createElement('span');
+  el.textContent = str;
+  return el.innerHTML;
 }

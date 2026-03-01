@@ -135,6 +135,15 @@ body {
   color: #1a1a2e;
 }
 
+.switcher-new-window {
+  color: #2ecc71;
+  font-weight: 600;
+}
+
+.switcher-new-window:active {
+  background: #0f3460;
+}
+
 /* === Terminal === */
 #terminal-container {
   flex: 1;

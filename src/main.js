@@ -40,6 +40,10 @@ const switcher = createSessionSwitcher({
   onSwitch: (session, windowIndex) => {
     terminal.switchWindow(session, windowIndex);
   },
+  onNewWindow: (session) => {
+    // tmux prefix + c = new window in current session
+    terminal.sendKeys('\x02c');
+  },
 });
 
 if (initialSession) {

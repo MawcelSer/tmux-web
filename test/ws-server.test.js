@@ -203,7 +203,7 @@ describe('WebSocket', () => {
     expect(ws.readyState).toBe(WebSocket.CLOSED);
   });
 
-  it('does not forward switch messages to PTY stdin', async () => {
+  it('sends tmux command mode switch to PTY on switch message', async () => {
     const mockPty = {
       dataCallbacks: [],
       exitCallbacks: [],
@@ -223,8 +223,38 @@ describe('WebSocket', () => {
 
     ws.send(JSON.stringify({ type: 'switch', session: 'other', window: 0 }));
     await new Promise((r) => setTimeout(r, 50));
-    // The switch message must NOT appear in PTY written data
-    expect(mockPty.written).toEqual([]);
+    // Should write tmux command mode sequence to PTY
+    expect(mockPty.written.length).toBe(1);
+    const sent = mockPty.written[0];
+    expect(sent).toContain('\x02'); // Ctrl+b prefix
+    expect(sent).toContain(':switch-client -t "other:0"');
+
+    ws.close();
+    await new Promise((r) => setTimeout(r, 50));
+  });
+
+  it('sends session-only switch when window is null', async () => {
+    const mockPty = {
+      dataCallbacks: [],
+      exitCallbacks: [],
+      written: [],
+      write(d) { this.written.push(d.toString()); },
+      resize() {},
+      kill() {},
+      onData(cb) { this.dataCallbacks.push(cb); },
+      onExit(cb) { this.exitCallbacks.push(cb); },
+    };
+    const mockCreatePty = vi.fn(() => mockPty);
+    const base = await startServer({ createPtyFn: mockCreatePty });
+    const wsUrl = base.replace('http', 'ws') + '/ws?session=test';
+
+    const ws = new WebSocket(wsUrl);
+    await new Promise((resolve) => ws.on('open', resolve));
+
+    ws.send(JSON.stringify({ type: 'switch', session: 'dev' }));
+    await new Promise((r) => setTimeout(r, 50));
+    const sent = mockPty.written[0];
+    expect(sent).toContain(':switch-client -t "dev"');
 
     ws.close();
     await new Promise((r) => setTimeout(r, 50));

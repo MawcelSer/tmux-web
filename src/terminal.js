@@ -5,13 +5,6 @@ import { SearchAddon } from '@xterm/addon-search';
 
 /**
  * Initialize xterm.js terminal and wire it to a WebSocket.
- *
- * @param {HTMLElement} container
- * @param {object} opts
- * @param {string} opts.session - tmux session name
- * @param {number} opts.fontSize
- * @param {(session: string, windowIndex: number) => void} opts.onSwitch
- * @returns {{ term, ws, fitAddon, setFontSize, dispose }}
  */
 export function createTerminal(container, { session, fontSize = 14 }) {
   const term = new Terminal({
@@ -55,7 +48,6 @@ export function createTerminal(container, { session, fontSize = 14 }) {
 
   term.open(container);
 
-  // Delay fit to ensure container is sized
   requestAnimationFrame(() => {
     fitAddon.fit();
   });
@@ -67,7 +59,6 @@ export function createTerminal(container, { session, fontSize = 14 }) {
   ws.binaryType = 'arraybuffer';
 
   ws.addEventListener('open', () => {
-    // Send initial size
     ws.send(JSON.stringify({
       type: 'resize',
       cols: term.cols,
@@ -104,6 +95,66 @@ export function createTerminal(container, { session, fontSize = 14 }) {
       ws.send(JSON.stringify({ type: 'resize', cols, rows }));
     }
   });
+
+  // --- Touch scroll → mouse wheel events for tmux ---
+  // When tmux has `set -g mouse on`, it expects mouse wheel escape sequences
+  // to enter/exit copy (scroll) mode. On mobile, touch events don't produce
+  // wheel events, so we convert touch drag → SGR mouse wheel sequences.
+  {
+    let touchStartY = null;
+    let scrollAccumulator = 0;
+    const PX_PER_LINE = 24;
+    const MAX_LINES_PER_FRAME = 5;
+
+    // Attach to the xterm screen element once it exists
+    const attachTouchScroll = () => {
+      const screen = container.querySelector('.xterm-screen');
+      if (!screen) return;
+
+      screen.addEventListener('touchstart', (e) => {
+        if (e.touches.length === 1) {
+          touchStartY = e.touches[0].clientY;
+          scrollAccumulator = 0;
+        }
+      }, { passive: true });
+
+      screen.addEventListener('touchmove', (e) => {
+        if (touchStartY === null || e.touches.length !== 1) return;
+
+        const currentY = e.touches[0].clientY;
+        const delta = touchStartY - currentY; // positive = finger moved up = scroll up
+        touchStartY = currentY;
+
+        // Ignore tiny movements (taps)
+        if (Math.abs(delta) < 2) return;
+
+        scrollAccumulator += delta;
+
+        const lines = Math.trunc(scrollAccumulator / PX_PER_LINE);
+        if (lines !== 0) {
+          scrollAccumulator -= lines * PX_PER_LINE;
+          // SGR mouse encoding: \x1b[<button;col;rowM
+          // button 64 = wheel up, 65 = wheel down
+          const button = lines > 0 ? 64 : 65;
+          const count = Math.min(Math.abs(lines), MAX_LINES_PER_FRAME);
+          const seq = `\x1b[<${button};1;1M`;
+          for (let i = 0; i < count; i++) {
+            sendKeys(seq);
+          }
+        }
+
+        e.preventDefault();
+      }, { passive: false });
+
+      screen.addEventListener('touchend', () => {
+        touchStartY = null;
+        scrollAccumulator = 0;
+      }, { passive: true });
+    };
+
+    // xterm-screen may not exist immediately, wait a frame
+    requestAnimationFrame(attachTouchScroll);
+  }
 
   function setFontSize(size) {
     term.options.fontSize = size;
