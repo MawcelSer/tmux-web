@@ -45,6 +45,14 @@ def main():
     master_fd, slave_fd = pty.openpty()
     set_pty_size(master_fd, cols, rows)
 
+    # Report slave TTY path to stderr so Node.js can use it for tmux commands
+    try:
+        slave_tty = os.ttyname(slave_fd)
+        sys.stderr.write(f"PTY:{slave_tty}\n")
+        sys.stderr.flush()
+    except OSError:
+        pass
+
     # Fork child
     pid = os.fork()
     if pid == 0:

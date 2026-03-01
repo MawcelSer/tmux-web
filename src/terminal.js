@@ -134,8 +134,9 @@ export function createTerminal(container, { session, fontSize = 14 }) {
         if (lines !== 0) {
           scrollAccumulator -= lines * PX_PER_LINE;
           // SGR mouse encoding: \x1b[<button;col;rowM
-          // button 64 = wheel up, 65 = wheel down
-          const button = lines > 0 ? 64 : 65;
+          // Natural scrolling: finger up (positive) = wheel down (65),
+          // finger down (negative) = wheel up (64) = see older content
+          const button = lines > 0 ? 65 : 64;
           const count = Math.min(Math.abs(lines), MAX_LINES_PER_FRAME);
           const seq = `\x1b[<${button};1;1M`;
           for (let i = 0; i < count; i++) {
@@ -177,11 +178,20 @@ export function createTerminal(container, { session, fontSize = 14 }) {
     }
   }
 
+  function newWindow(targetSession) {
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({
+        type: 'new-window',
+        session: targetSession,
+      }));
+    }
+  }
+
   function dispose() {
     resizeObserver.disconnect();
     ws.close();
     term.dispose();
   }
 
-  return { term, ws, fitAddon, searchAddon, setFontSize, sendKeys, switchWindow, dispose };
+  return { term, ws, fitAddon, searchAddon, setFontSize, sendKeys, switchWindow, newWindow, dispose };
 }

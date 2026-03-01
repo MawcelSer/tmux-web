@@ -4,6 +4,7 @@ import { join, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { dirname } from 'node:path';
 import { WebSocketServer } from 'ws';
+import { exec } from 'node:child_process';
 import { createPty as defaultCreatePty } from './pty-manager.js';
 import { listSessions as defaultListSessions, listWindows as defaultListWindows } from './tmux-api.js';
 
@@ -110,12 +111,19 @@ export function createServer({
           return;
         }
         if (parsed.type === 'switch') {
-          // Send switch via tmux command mode through the PTY.
-          // \x02 = Ctrl+b (tmux prefix), then : enters command mode.
+          // Use server-side tmux command targeting the specific client TTY
+          const tty = pty.getTty();
           const target = parsed.window != null
             ? `${parsed.session}:${parsed.window}`
             : parsed.session;
-          pty.write(`\x02:switch-client -t "${target}"\r`);
+          if (tty) {
+            exec(`tmux switch-client -c '${tty}' -t '${target}'`, () => {});
+          }
+          return;
+        }
+        if (parsed.type === 'new-window') {
+          // Create a new tmux window in the given session
+          exec(`tmux new-window -t '${parsed.session}'`, () => {});
           return;
         }
       } catch {

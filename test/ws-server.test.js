@@ -203,7 +203,7 @@ describe('WebSocket', () => {
     expect(ws.readyState).toBe(WebSocket.CLOSED);
   });
 
-  it('sends tmux command mode switch to PTY on switch message', async () => {
+  it('does not write switch message to PTY stdin (handled server-side)', async () => {
     const mockPty = {
       dataCallbacks: [],
       exitCallbacks: [],
@@ -211,6 +211,7 @@ describe('WebSocket', () => {
       write(d) { this.written.push(d.toString()); },
       resize() {},
       kill() {},
+      getTty() { return '/dev/pts/99'; },
       onData(cb) { this.dataCallbacks.push(cb); },
       onExit(cb) { this.exitCallbacks.push(cb); },
     };
@@ -223,17 +224,14 @@ describe('WebSocket', () => {
 
     ws.send(JSON.stringify({ type: 'switch', session: 'other', window: 0 }));
     await new Promise((r) => setTimeout(r, 50));
-    // Should write tmux command mode sequence to PTY
-    expect(mockPty.written.length).toBe(1);
-    const sent = mockPty.written[0];
-    expect(sent).toContain('\x02'); // Ctrl+b prefix
-    expect(sent).toContain(':switch-client -t "other:0"');
+    // Switch is handled via server-side exec, NOT written to PTY
+    expect(mockPty.written).toEqual([]);
 
     ws.close();
     await new Promise((r) => setTimeout(r, 50));
   });
 
-  it('sends session-only switch when window is null', async () => {
+  it('does not write new-window message to PTY stdin', async () => {
     const mockPty = {
       dataCallbacks: [],
       exitCallbacks: [],
@@ -241,6 +239,7 @@ describe('WebSocket', () => {
       write(d) { this.written.push(d.toString()); },
       resize() {},
       kill() {},
+      getTty() { return '/dev/pts/99'; },
       onData(cb) { this.dataCallbacks.push(cb); },
       onExit(cb) { this.exitCallbacks.push(cb); },
     };
@@ -251,10 +250,9 @@ describe('WebSocket', () => {
     const ws = new WebSocket(wsUrl);
     await new Promise((resolve) => ws.on('open', resolve));
 
-    ws.send(JSON.stringify({ type: 'switch', session: 'dev' }));
+    ws.send(JSON.stringify({ type: 'new-window', session: 'main' }));
     await new Promise((r) => setTimeout(r, 50));
-    const sent = mockPty.written[0];
-    expect(sent).toContain(':switch-client -t "dev"');
+    expect(mockPty.written).toEqual([]);
 
     ws.close();
     await new Promise((r) => setTimeout(r, 50));

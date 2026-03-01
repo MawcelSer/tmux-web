@@ -15,7 +15,7 @@ export const RESIZE_PREFIX = Buffer.from([0x00, 0x52]); // \x00R
  * @param {number} opts.cols
  * @param {number} opts.rows
  * @param {Function} [opts.spawnFn] - injectable spawn (for testing)
- * @returns {{ write, resize, kill, onData, onExit }}
+ * @returns {{ write, resize, kill, onData, onExit, getTty }}
  */
 export function createPty({ session = '', cols = 80, rows = 24, spawnFn = defaultSpawn }) {
   const child = spawnFn(
@@ -29,12 +29,18 @@ export function createPty({ session = '', cols = 80, rows = 24, spawnFn = defaul
 
   const dataCallbacks = [];
   const exitCallbacks = [];
+  let clientTty = null;
 
   child.stdout.on('data', (chunk) => {
     for (const cb of dataCallbacks) cb(chunk);
   });
 
-  child.stderr.on('data', () => {});
+  // Capture PTY slave path from stderr (format: "PTY:/dev/pts/X\n")
+  child.stderr.on('data', (chunk) => {
+    const str = chunk.toString();
+    const match = str.match(/^PTY:(.+)$/m);
+    if (match) clientTty = match[1].trim();
+  });
 
   child.on('exit', (code) => {
     for (const cb of exitCallbacks) cb(code);
@@ -64,6 +70,10 @@ export function createPty({ session = '', cols = 80, rows = 24, spawnFn = defaul
 
     onExit(cb) {
       exitCallbacks.push(cb);
+    },
+
+    getTty() {
+      return clientTty;
     },
   };
 }
