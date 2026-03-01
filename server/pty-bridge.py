@@ -3,7 +3,9 @@
 PTY bridge for TmuxWeb.
 
 Allocates a real pseudo-terminal, spawns `tmux attach -t <session>`,
-and bridges stdin/stdout with the PTY.
+and bridges stdin/stdout with the PTY. Server-side PTY kill handles
+dedup — killing the bridge closes the master fd, detaching only that
+specific tmux client without affecting other devices.
 
 Resize protocol: when stdin contains \x00R followed by 4 bytes
 (cols_hi, cols_lo, rows_hi, rows_lo), the PTY is resized via ioctl.

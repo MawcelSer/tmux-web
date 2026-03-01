@@ -258,6 +258,139 @@ describe('WebSocket', () => {
     await new Promise((r) => setTimeout(r, 50));
   });
 
+  it('kills old PTY when new WS connects for same session', async () => {
+    const mockPtys = [
+      {
+        dataCallbacks: [],
+        exitCallbacks: [],
+        killed: false,
+        write() {},
+        resize() {},
+        kill() { this.killed = true; },
+        onData(cb) { this.dataCallbacks.push(cb); },
+        onExit(cb) { this.exitCallbacks.push(cb); },
+      },
+      {
+        dataCallbacks: [],
+        exitCallbacks: [],
+        killed: false,
+        write() {},
+        resize() {},
+        kill() { this.killed = true; },
+        onData(cb) { this.dataCallbacks.push(cb); },
+        onExit(cb) { this.exitCallbacks.push(cb); },
+      },
+    ];
+    let callCount = 0;
+    const mockCreatePty = vi.fn(() => mockPtys[callCount++]);
+    const base = await startServer({ createPtyFn: mockCreatePty });
+    const wsUrl = base.replace('http', 'ws') + '/ws?session=mydev';
+
+    const ws1 = new WebSocket(wsUrl);
+    await new Promise((resolve) => ws1.on('open', resolve));
+
+    const ws2 = new WebSocket(wsUrl);
+    await new Promise((resolve) => ws2.on('open', resolve));
+
+    // First PTY should have been killed when second connection arrived
+    expect(mockPtys[0].killed).toBe(true);
+    expect(mockPtys[1].killed).toBe(false);
+
+    ws1.close();
+    ws2.close();
+    await new Promise((r) => setTimeout(r, 50));
+  });
+
+  it('sends close code 1000 with reason when replacing a session', async () => {
+    const mockPtys = [
+      {
+        dataCallbacks: [],
+        exitCallbacks: [],
+        killed: false,
+        write() {},
+        resize() {},
+        kill() { this.killed = true; },
+        onData(cb) { this.dataCallbacks.push(cb); },
+        onExit(cb) { this.exitCallbacks.push(cb); },
+      },
+      {
+        dataCallbacks: [],
+        exitCallbacks: [],
+        killed: false,
+        write() {},
+        resize() {},
+        kill() { this.killed = true; },
+        onData(cb) { this.dataCallbacks.push(cb); },
+        onExit(cb) { this.exitCallbacks.push(cb); },
+      },
+    ];
+    let callCount = 0;
+    const mockCreatePty = vi.fn(() => mockPtys[callCount++]);
+    const base = await startServer({ createPtyFn: mockCreatePty });
+    const wsUrl = base.replace('http', 'ws') + '/ws?session=mydev';
+
+    const ws1 = new WebSocket(wsUrl);
+    await new Promise((resolve) => ws1.on('open', resolve));
+
+    const closePromise = new Promise((resolve) => {
+      ws1.on('close', (code, reason) => {
+        resolve({ code, reason: reason.toString() });
+      });
+    });
+
+    const ws2 = new WebSocket(wsUrl);
+    await new Promise((resolve) => ws2.on('open', resolve));
+
+    const { code, reason } = await closePromise;
+    expect(code).toBe(1000);
+    expect(reason).toBe('Replaced by new connection');
+
+    ws2.close();
+    await new Promise((r) => setTimeout(r, 50));
+  });
+
+  it('does not kill PTY for different session names', async () => {
+    const mockPtys = [
+      {
+        dataCallbacks: [],
+        exitCallbacks: [],
+        killed: false,
+        write() {},
+        resize() {},
+        kill() { this.killed = true; },
+        onData(cb) { this.dataCallbacks.push(cb); },
+        onExit(cb) { this.exitCallbacks.push(cb); },
+      },
+      {
+        dataCallbacks: [],
+        exitCallbacks: [],
+        killed: false,
+        write() {},
+        resize() {},
+        kill() { this.killed = true; },
+        onData(cb) { this.dataCallbacks.push(cb); },
+        onExit(cb) { this.exitCallbacks.push(cb); },
+      },
+    ];
+    let callCount = 0;
+    const mockCreatePty = vi.fn(() => mockPtys[callCount++]);
+    const base = await startServer({ createPtyFn: mockCreatePty });
+
+    const ws1 = new WebSocket(base.replace('http', 'ws') + '/ws?session=dev');
+    await new Promise((resolve) => ws1.on('open', resolve));
+
+    const ws2 = new WebSocket(base.replace('http', 'ws') + '/ws?session=prod');
+    await new Promise((resolve) => ws2.on('open', resolve));
+
+    // Neither PTY should be killed — different sessions
+    expect(mockPtys[0].killed).toBe(false);
+    expect(mockPtys[1].killed).toBe(false);
+
+    ws1.close();
+    ws2.close();
+    await new Promise((r) => setTimeout(r, 50));
+  });
+
   it('passes session name from query string to createPty', async () => {
     const mockPty = {
       dataCallbacks: [],

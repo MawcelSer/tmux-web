@@ -58,6 +58,10 @@ export function createTerminal(container, { session, fontSize = 14, onDataTransf
   let intentionalClose = false;
 
   function connect() {
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    }
     const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
     const wsUrl = `${protocol}//${location.host}/ws?session=${encodeURIComponent(currentSession || '')}`;
     ws = new WebSocket(wsUrl);
@@ -79,8 +83,12 @@ export function createTerminal(container, { session, fontSize = 14, onDataTransf
       term.write(data);
     });
 
-    ws.addEventListener('close', () => {
+    ws.addEventListener('close', (event) => {
       if (intentionalClose) return;
+      if (event.code === 1000 && event.reason === 'Replaced by new connection') {
+        term.write('\r\n\x1b[1;33m[Session taken by another connection]\x1b[0m\r\n');
+        return;
+      }
       term.write('\r\n\x1b[1;33m[Reconnecting...]\x1b[0m\r\n');
       scheduleReconnect();
     });
@@ -99,11 +107,6 @@ export function createTerminal(container, { session, fontSize = 14, onDataTransf
 
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible' && (!ws || ws.readyState !== WebSocket.OPEN)) {
-      if (reconnectTimer) {
-        clearTimeout(reconnectTimer);
-        reconnectTimer = null;
-      }
-      // Close any lingering connection in CONNECTING or CLOSING state
       if (ws && ws.readyState !== WebSocket.CLOSED) {
         ws.close();
       }
