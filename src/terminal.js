@@ -47,16 +47,10 @@ export function createTerminal(container, { session, fontSize = 14, onDataTransf
 
   // Force mobile keyboard to lowercase mode.
   // SwiftKey and some Android keyboards ignore autocapitalize on <textarea>
-  // but respect it on ancestor elements. Set it everywhere for coverage.
-  document.body.setAttribute('autocapitalize', 'none');
-  container.setAttribute('autocapitalize', 'none');
-  const helperTextarea = container.querySelector('.xterm-helper-textarea');
-  if (helperTextarea) {
-    helperTextarea.setAttribute('autocapitalize', 'none');
-    helperTextarea.setAttribute('autocorrect', 'off');
-    helperTextarea.setAttribute('autocomplete', 'off');
-    helperTextarea.setAttribute('spellcheck', 'false');
-  }
+  // but respect it on ancestor elements. The body and container attributes
+  // are set in index.html. Do NOT modify xterm's internal textarea — adding
+  // attributes like autocomplete="off" disrupts SwiftKey's composition
+  // handling and causes character doubling.
 
   requestAnimationFrame(() => {
     fitAddon.fit();
