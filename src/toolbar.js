@@ -27,13 +27,8 @@ export function getKeySequence(label) {
 }
 
 /**
- * Create and mount the toolbar DOM.
- *
- * @param {HTMLElement} container
- * @param {object} opts
- * @param {(seq: string) => void} opts.onKey - called with the escape sequence to send
- * @param {() => void} opts.onIncrease - font size increase
- * @param {() => void} opts.onDecrease - font size decrease
+ * Create and mount the toolbar DOM — compact, single-row, scrollable,
+ * styled like JuiceSSH / Termius extra-keys bar.
  */
 export function createToolbar(container, { onKey, onIncrease, onDecrease }) {
   let prefixMode = false;
@@ -41,49 +36,76 @@ export function createToolbar(container, { onKey, onIncrease, onDecrease }) {
   const toolbar = document.createElement('div');
   toolbar.className = 'toolbar';
 
+  function sep() {
+    const s = document.createElement('span');
+    s.className = 'toolbar-sep';
+    return s;
+  }
+
   function renderButtons() {
     toolbar.innerHTML = '';
 
     if (prefixMode) {
-      // Show tmux prefix keys
       const label = document.createElement('span');
       label.className = 'toolbar-prefix-label';
-      label.textContent = 'Prefix:';
+      label.textContent = 'C-b';
       toolbar.appendChild(label);
 
       for (const key of TMUX_PREFIX_KEYS) {
-        const btn = makeButton(key, () => {
+        toolbar.appendChild(makeButton(key, () => {
           onKey(key);
           prefixMode = false;
           renderButtons();
-        });
-        toolbar.appendChild(btn);
+        }));
       }
 
-      const cancel = makeButton('✕', () => {
+      toolbar.appendChild(sep());
+      const cancel = makeButton('ESC', () => {
         prefixMode = false;
         renderButtons();
       });
-      cancel.classList.add('toolbar-cancel');
+      cancel.classList.add('toolbar-cancel', 'toolbar-btn-wide');
       toolbar.appendChild(cancel);
     } else {
-      // Standard toolbar
-      const ctrlB = makeButton('Ctrl+b', () => {
+      // Prefix toggle
+      const ctrlB = makeButton('C-b', () => {
         onKey(KEYS['Ctrl+b']);
         prefixMode = true;
         renderButtons();
-      });
-      ctrlB.classList.add('toolbar-prefix-btn');
+      }, 'toolbar-prefix-btn toolbar-btn-wide');
       toolbar.appendChild(ctrlB);
 
-      for (const key of ['Esc', 'Tab', '←', '↑', '↓', '→', 'PgUp', 'PgDn']) {
-        toolbar.appendChild(makeButton(key, () => onKey(KEYS[key])));
-      }
-      for (const key of ['Ctrl+C', 'Ctrl+D', 'Ctrl+Z']) {
-        toolbar.appendChild(makeButton(key, () => onKey(KEYS[key])));
+      toolbar.appendChild(sep());
+
+      // Navigation
+      for (const key of ['Esc', 'Tab']) {
+        toolbar.appendChild(makeButton(key, () => onKey(KEYS[key]), 'toolbar-btn-wide'));
       }
 
-      // Font size controls
+      toolbar.appendChild(sep());
+
+      // Arrows
+      for (const key of ['←', '↑', '↓', '→']) {
+        toolbar.appendChild(makeButton(key, () => onKey(KEYS[key]), 'toolbar-btn-arrow'));
+      }
+
+      toolbar.appendChild(sep());
+
+      // Page nav
+      for (const key of ['PgUp', 'PgDn']) {
+        toolbar.appendChild(makeButton(key, () => onKey(KEYS[key]), 'toolbar-btn-wide'));
+      }
+
+      toolbar.appendChild(sep());
+
+      // Ctrl combos
+      toolbar.appendChild(makeButton('C-c', () => onKey(KEYS['Ctrl+C']), 'toolbar-btn-wide'));
+      toolbar.appendChild(makeButton('C-d', () => onKey(KEYS['Ctrl+D']), 'toolbar-btn-wide'));
+      toolbar.appendChild(makeButton('C-z', () => onKey(KEYS['Ctrl+Z']), 'toolbar-btn-wide'));
+
+      toolbar.appendChild(sep());
+
+      // Font size
       toolbar.appendChild(makeButton('A-', onDecrease, 'toolbar-font'));
       toolbar.appendChild(makeButton('A+', onIncrease, 'toolbar-font'));
     }

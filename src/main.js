@@ -50,3 +50,21 @@ if (initialSession) {
 termContainer.addEventListener('click', () => {
   terminal.term.focus();
 });
+
+// --- Virtual keyboard viewport fix ---
+// Use visualViewport API to shrink the layout when the mobile keyboard opens,
+// so the terminal + toolbar stay above the keyboard instead of being covered.
+if (window.visualViewport) {
+  const onViewportResize = () => {
+    const vv = window.visualViewport;
+    // Height difference = keyboard height
+    const keyboardOffset = window.innerHeight - vv.height;
+    document.body.style.height = `${vv.height}px`;
+    // Scroll the viewport to compensate for any offset
+    document.body.style.transform = `translateY(${vv.offsetTop}px)`;
+    // Re-fit terminal to the new size
+    terminal.fitAddon.fit();
+  };
+  window.visualViewport.addEventListener('resize', onViewportResize);
+  window.visualViewport.addEventListener('scroll', onViewportResize);
+}

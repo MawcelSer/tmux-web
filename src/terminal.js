@@ -117,8 +117,13 @@ export function createTerminal(container, { session, fontSize = 14 }) {
   }
 
   function switchWindow(targetSession, windowIndex) {
-    const cmd = `tmux switch-client -t ${targetSession}:${windowIndex}\n`;
-    sendKeys(cmd);
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({
+        type: 'switch',
+        session: targetSession,
+        window: windowIndex,
+      }));
+    }
   }
 
   function dispose() {

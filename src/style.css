@@ -5,7 +5,12 @@
   padding: 0;
 }
 
-html, body {
+html {
+  height: 100%;
+  overflow: hidden;
+}
+
+body {
   height: 100%;
   overflow: hidden;
   background: #1a1a2e;
@@ -13,23 +18,21 @@ html, body {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   touch-action: manipulation;
   -webkit-text-size-adjust: none;
-}
-
-body {
   display: flex;
   flex-direction: column;
+  /* body height is dynamically set by visualViewport JS */
 }
 
 /* === Top Bar === */
 #topbar {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 6px 10px;
+  gap: 6px;
+  padding: 4px 8px;
   background: #16213e;
   border-bottom: 1px solid #0f3460;
   flex-shrink: 0;
-  min-height: 40px;
+  min-height: 34px;
 }
 
 .topbar-btn {
@@ -37,11 +40,11 @@ body {
   color: #e0e0e0;
   border: 1px solid #533483;
   border-radius: 4px;
-  padding: 6px 12px;
-  font-size: 13px;
+  padding: 4px 10px;
+  font-size: 12px;
   cursor: pointer;
   touch-action: manipulation;
-  min-height: 36px;
+  min-height: 30px;
 }
 
 .topbar-btn:active {
@@ -51,7 +54,7 @@ body {
 #current-session {
   flex: 1;
   text-align: center;
-  font-size: 13px;
+  font-size: 12px;
   color: #a0a0c0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -61,7 +64,7 @@ body {
 /* === Switcher Panel === */
 .switcher-panel {
   position: absolute;
-  top: 40px;
+  top: 34px;
   left: 0;
   right: 0;
   z-index: 100;
@@ -80,24 +83,24 @@ body {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 8px 12px;
+  padding: 6px 10px;
   border-bottom: 1px solid #0f3460;
 }
 
 #switcher-title {
   font-weight: 600;
-  font-size: 14px;
+  font-size: 13px;
 }
 
 .switcher-close {
   background: none;
   border: none;
   color: #e0e0e0;
-  font-size: 20px;
+  font-size: 18px;
   cursor: pointer;
   padding: 4px 8px;
-  min-height: 36px;
-  min-width: 36px;
+  min-height: 32px;
+  min-width: 32px;
 }
 
 .switcher-list {
@@ -105,14 +108,14 @@ body {
 }
 
 .switcher-list li {
-  padding: 10px 14px;
+  padding: 8px 12px;
   border-bottom: 1px solid #0f3460;
   cursor: pointer;
-  font-size: 14px;
+  font-size: 13px;
   display: flex;
   justify-content: space-between;
   align-items: center;
-  min-height: 44px;
+  min-height: 40px;
 }
 
 .switcher-list li:active {
@@ -120,9 +123,9 @@ body {
 }
 
 .switcher-list li .badge {
-  font-size: 11px;
+  font-size: 10px;
   background: #533483;
-  padding: 2px 8px;
+  padding: 2px 6px;
   border-radius: 10px;
   color: #e0e0e0;
 }
@@ -137,6 +140,7 @@ body {
   flex: 1;
   overflow: hidden;
   position: relative;
+  min-height: 0; /* crucial for flex shrinking */
 }
 
 #terminal-container .xterm {
@@ -144,55 +148,91 @@ body {
   padding: 2px;
 }
 
-/* === Bottom Toolbar === */
+/* === Bottom Toolbar (JuiceSSH / Termius style) === */
 #toolbar-container {
   flex-shrink: 0;
-  background: #16213e;
-  border-top: 1px solid #0f3460;
+  background: #202040;
+  border-top: 1px solid #333360;
 }
 
 .toolbar {
   display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  padding: 6px 6px;
-  justify-content: center;
+  gap: 3px;
+  padding: 3px 4px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
   align-items: center;
+  -webkit-overflow-scrolling: touch;
+}
+
+.toolbar::-webkit-scrollbar {
+  display: none;
 }
 
 .toolbar-btn {
-  background: #0f3460;
-  color: #e0e0e0;
-  border: 1px solid #533483;
-  border-radius: 4px;
+  background: #2a2a50;
+  color: #c0c0e0;
+  border: 1px solid #3a3a60;
+  border-radius: 3px;
   padding: 0;
-  font-size: 12px;
+  font-size: 11px;
   cursor: pointer;
   touch-action: manipulation;
-  min-width: 44px;
-  min-height: 44px;
-  display: flex;
+  min-width: 32px;
+  height: 28px;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
   user-select: none;
   -webkit-user-select: none;
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .toolbar-btn:active {
   background: #533483;
+  border-color: #7a4ab5;
 }
 
+/* Wider buttons for multi-char labels */
+.toolbar-btn-wide {
+  padding: 0 6px;
+  min-width: auto;
+}
+
+/* Ctrl+b prefix toggle */
 .toolbar-prefix-btn {
-  background: #533483;
+  background: #3a2060;
   border-color: #e94560;
-  font-weight: 700;
-}
-
-.toolbar-prefix-label {
-  font-size: 12px;
   color: #e94560;
   font-weight: 700;
-  padding: 0 6px;
+  font-size: 10px;
+  padding: 0 5px;
+}
+
+.toolbar-prefix-btn.active {
+  background: #e94560;
+  color: #fff;
+}
+
+/* Separator between key groups */
+.toolbar-sep {
+  width: 1px;
+  height: 18px;
+  background: #3a3a60;
+  flex-shrink: 0;
+  margin: 0 1px;
+}
+
+/* Prefix mode label */
+.toolbar-prefix-label {
+  font-size: 10px;
+  color: #e94560;
+  font-weight: 700;
+  padding: 0 4px;
+  flex-shrink: 0;
 }
 
 .toolbar-cancel {
@@ -201,39 +241,53 @@ body {
   color: #fff;
 }
 
+/* Font size buttons */
 .toolbar-font {
   background: #1a1a2e;
   font-weight: 700;
-  font-size: 14px;
+  font-size: 11px;
+  border-color: #444466;
+}
+
+/* Arrow key cluster - slightly highlighted */
+.toolbar-btn-arrow {
+  min-width: 28px;
+  font-size: 13px;
+  padding: 0;
 }
 
 /* === Responsive === */
 @media (max-width: 400px) {
   .toolbar-btn {
-    min-width: 38px;
-    min-height: 38px;
-    font-size: 11px;
+    min-width: 28px;
+    height: 26px;
+    font-size: 10px;
+  }
+
+  .toolbar-btn-arrow {
+    min-width: 26px;
   }
 
   .topbar-btn {
-    padding: 4px 8px;
-    font-size: 12px;
+    padding: 3px 6px;
+    font-size: 11px;
   }
 }
 
 @media (orientation: landscape) and (max-height: 500px) {
   #topbar {
-    padding: 3px 8px;
-    min-height: 32px;
+    padding: 2px 6px;
+    min-height: 28px;
   }
 
   .toolbar {
-    padding: 3px 4px;
+    padding: 2px 3px;
     gap: 2px;
   }
 
   .toolbar-btn {
-    min-height: 36px;
-    min-width: 36px;
+    height: 24px;
+    min-width: 26px;
+    font-size: 10px;
   }
 }

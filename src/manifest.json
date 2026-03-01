@@ -1,0 +1,16 @@
+{
+  "name": "TmuxWeb",
+  "short_name": "TmuxWeb",
+  "start_url": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#1a1a2e",
+  "theme_color": "#16213e",
+  "icons": [
+    {
+      "src": "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect fill='%231a1a2e' width='100' height='100' rx='15'/><text y='68' x='50' text-anchor='middle' fill='%232ecc71' font-size='48' font-family='monospace'>T</text></svg>",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ]
+}

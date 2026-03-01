@@ -4,6 +4,7 @@ import { join, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { dirname } from 'node:path';
 import { WebSocketServer } from 'ws';
+import { exec } from 'node:child_process';
 import { createPty as defaultCreatePty } from './pty-manager.js';
 import { listSessions as defaultListSessions, listWindows as defaultListWindows } from './tmux-api.js';
 
@@ -102,11 +103,19 @@ export function createServer({
 
     ws.on('message', (msg) => {
       const str = msg.toString();
-      // Check for resize command
+      // Check for JSON control messages
       try {
         const parsed = JSON.parse(str);
         if (parsed.type === 'resize' && parsed.cols && parsed.rows) {
           pty.resize(parsed.cols, parsed.rows);
+          return;
+        }
+        if (parsed.type === 'switch') {
+          // Execute tmux switch-client server-side, not through the PTY
+          const target = parsed.window != null
+            ? `${parsed.session}:${parsed.window}`
+            : parsed.session;
+          exec(`tmux switch-client -t ${JSON.stringify(target)}`, () => {});
           return;
         }
       } catch {

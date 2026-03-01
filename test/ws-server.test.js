@@ -203,6 +203,33 @@ describe('WebSocket', () => {
     expect(ws.readyState).toBe(WebSocket.CLOSED);
   });
 
+  it('does not forward switch messages to PTY stdin', async () => {
+    const mockPty = {
+      dataCallbacks: [],
+      exitCallbacks: [],
+      written: [],
+      write(d) { this.written.push(d.toString()); },
+      resize() {},
+      kill() {},
+      onData(cb) { this.dataCallbacks.push(cb); },
+      onExit(cb) { this.exitCallbacks.push(cb); },
+    };
+    const mockCreatePty = vi.fn(() => mockPty);
+    const base = await startServer({ createPtyFn: mockCreatePty });
+    const wsUrl = base.replace('http', 'ws') + '/ws?session=test';
+
+    const ws = new WebSocket(wsUrl);
+    await new Promise((resolve) => ws.on('open', resolve));
+
+    ws.send(JSON.stringify({ type: 'switch', session: 'other', window: 0 }));
+    await new Promise((r) => setTimeout(r, 50));
+    // The switch message must NOT appear in PTY written data
+    expect(mockPty.written).toEqual([]);
+
+    ws.close();
+    await new Promise((r) => setTimeout(r, 50));
+  });
+
   it('passes session name from query string to createPty', async () => {
     const mockPty = {
       dataCallbacks: [],
