@@ -1,6 +1,20 @@
 /**
  * Session/Window switcher panel logic.
  */
+
+const SESSION_COLORS = [
+  '#58a6ff', '#3fb950', '#d29922', '#bc8cff', '#f85149',
+  '#39d353', '#79c0ff', '#d2a8ff', '#ff7b72', '#e3b341',
+];
+
+function sessionColor(name) {
+  let hash = 0;
+  for (let i = 0; i < name.length; i++) {
+    hash = ((hash << 5) - hash + name.charCodeAt(i)) | 0;
+  }
+  return SESSION_COLORS[Math.abs(hash) % SESSION_COLORS.length];
+}
+
 export function createSessionSwitcher({ panel, list, title, closeBtn, sessionsBtn, windowsBtn, currentLabel, onSwitch, onNewWindow }) {
   let currentSession = '';
 
@@ -98,6 +112,8 @@ export function createSessionSwitcher({ panel, list, title, closeBtn, sessionsBt
   function setCurrentSession(name) {
     currentSession = name;
     currentLabel.textContent = name || '—';
+    currentLabel.style.color = name ? sessionColor(name) : '#8b949e';
+    currentLabel.style.fontWeight = name ? '600' : 'normal';
   }
 
   return {

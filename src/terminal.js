@@ -3,17 +3,17 @@ import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import { SearchAddon } from '@xterm/addon-search';
 
-export function createTerminal(container, { session, fontSize = 14 }) {
+export function createTerminal(container, { session, fontSize = 14, onDataTransform }) {
   const term = new Terminal({
     fontSize,
     fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'Consolas', monospace",
     theme: {
-      background: '#0d1117',
+      background: '#101b2c',
       foreground: '#c9d1d9',
       cursor: '#58a6ff',
-      cursorAccent: '#0d1117',
+      cursorAccent: '#101b2c',
       selectionBackground: 'rgba(31, 111, 235, 0.3)',
-      black: '#0d1117',
+      black: '#101b2c',
       red: '#f85149',
       green: '#3fb950',
       yellow: '#d29922',
@@ -49,34 +49,71 @@ export function createTerminal(container, { session, fontSize = 14 }) {
     fitAddon.fit();
   });
 
-  // Connect WebSocket
-  const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const wsUrl = `${protocol}//${location.host}/ws?session=${encodeURIComponent(session || '')}`;
-  const ws = new WebSocket(wsUrl);
-  ws.binaryType = 'arraybuffer';
+  // --- WebSocket with auto-reconnect ---
+  let ws = null;
+  let currentSession = session;
+  let reconnectTimer = null;
+  let reconnectDelay = 1000;
+  const MAX_RECONNECT_DELAY = 30000;
+  let intentionalClose = false;
 
-  ws.addEventListener('open', () => {
-    ws.send(JSON.stringify({
-      type: 'resize',
-      cols: term.cols,
-      rows: term.rows,
-    }));
+  function connect() {
+    const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsUrl = `${protocol}//${location.host}/ws?session=${encodeURIComponent(currentSession || '')}`;
+    ws = new WebSocket(wsUrl);
+    ws.binaryType = 'arraybuffer';
+
+    ws.addEventListener('open', () => {
+      reconnectDelay = 1000;
+      ws.send(JSON.stringify({
+        type: 'resize',
+        cols: term.cols,
+        rows: term.rows,
+      }));
+    });
+
+    ws.addEventListener('message', (event) => {
+      const data = event.data instanceof ArrayBuffer
+        ? new Uint8Array(event.data)
+        : event.data;
+      term.write(data);
+    });
+
+    ws.addEventListener('close', () => {
+      if (intentionalClose) return;
+      term.write('\r\n\x1b[1;33m[Reconnecting...]\x1b[0m\r\n');
+      scheduleReconnect();
+    });
+  }
+
+  function scheduleReconnect() {
+    if (reconnectTimer) return;
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = null;
+      connect();
+      reconnectDelay = Math.min(reconnectDelay * 2, MAX_RECONNECT_DELAY);
+    }, reconnectDelay);
+  }
+
+  connect();
+
+  // Reconnect immediately when page becomes visible
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && (!ws || ws.readyState !== WebSocket.OPEN)) {
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
+      reconnectDelay = 1000;
+      connect();
+    }
   });
 
-  ws.addEventListener('message', (event) => {
-    const data = event.data instanceof ArrayBuffer
-      ? new Uint8Array(event.data)
-      : event.data;
-    term.write(data);
-  });
-
-  ws.addEventListener('close', () => {
-    term.write('\r\n\x1b[1;31m[Connection closed]\x1b[0m\r\n');
-  });
-
+  // Send data with optional modifier transform
   term.onData((data) => {
-    if (ws.readyState === WebSocket.OPEN) {
-      ws.send(data);
+    const transformed = onDataTransform ? onDataTransform(data) : data;
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(transformed);
     }
   });
 
@@ -87,29 +124,25 @@ export function createTerminal(container, { session, fontSize = 14 }) {
   resizeObserver.observe(container);
 
   term.onResize(({ cols, rows }) => {
-    if (ws.readyState === WebSocket.OPEN) {
+    if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ type: 'resize', cols, rows }));
     }
   });
 
   // --- Touch gestures ---
-  // Handles: 1-finger vertical = scroll, 1-finger horizontal = swipe session,
-  //          2-finger pinch = zoom font size
   {
     let touchStartY = null;
     let touchStartX = null;
     let scrollAccumulator = 0;
-    let gestureDirection = null; // null | 'scroll' | 'swipe'
+    let gestureDirection = null;
     const PX_PER_LINE = 24;
     const MAX_LINES_PER_FRAME = 5;
-    const SWIPE_THRESHOLD = 0.4; // 40% of screen width to trigger
-    const DIRECTION_LOCK_PX = 10; // pixels to determine scroll vs swipe
+    const SWIPE_THRESHOLD = 0.4;
+    const DIRECTION_LOCK_PX = 10;
 
-    // Pinch zoom state
     let pinchStartDist = null;
     let pinchStartFontSize = null;
 
-    // Swipe arrow elements
     const swipeLeftEl = document.getElementById('swipe-left');
     const swipeRightEl = document.getElementById('swipe-right');
 
@@ -119,10 +152,9 @@ export function createTerminal(container, { session, fontSize = 14 }) {
 
       screen.addEventListener('touchstart', (e) => {
         if (e.touches.length === 2) {
-          // Pinch start
           pinchStartDist = getTouchDistance(e.touches);
           pinchStartFontSize = term.options.fontSize;
-          touchStartY = null; // cancel scroll
+          touchStartY = null;
           gestureDirection = null;
           e.preventDefault();
           return;
@@ -136,20 +168,17 @@ export function createTerminal(container, { session, fontSize = 14 }) {
       }, { passive: false });
 
       screen.addEventListener('touchmove', (e) => {
-        // --- Pinch zoom ---
         if (e.touches.length === 2 && pinchStartDist !== null) {
           const dist = getTouchDistance(e.touches);
           const scale = dist / pinchStartDist;
           const newSize = Math.round(pinchStartFontSize * scale);
           if (newSize !== term.options.fontSize && newSize >= 6 && newSize <= 32) {
-            // Dispatch to font size manager via custom event
             container.dispatchEvent(new CustomEvent('pinch-zoom', { detail: { fontSize: newSize } }));
           }
           e.preventDefault();
           return;
         }
 
-        // --- Single finger: scroll or swipe ---
         if (touchStartY === null || e.touches.length !== 1) return;
 
         const currentY = e.touches[0].clientY;
@@ -157,7 +186,6 @@ export function createTerminal(container, { session, fontSize = 14 }) {
         const deltaY = touchStartY - currentY;
         const deltaX = currentX - touchStartX;
 
-        // Lock direction on first significant movement
         if (gestureDirection === null && (Math.abs(deltaY) > DIRECTION_LOCK_PX || Math.abs(deltaX) > DIRECTION_LOCK_PX)) {
           if (Math.abs(deltaX) > Math.abs(deltaY) * 1.5) {
             gestureDirection = 'swipe';
@@ -167,10 +195,6 @@ export function createTerminal(container, { session, fontSize = 14 }) {
         }
 
         if (gestureDirection === 'swipe') {
-          // Show arrow indicators based on swipe progress
-          const screenWidth = window.innerWidth;
-          const progress = Math.abs(deltaX) / screenWidth;
-
           if (swipeLeftEl && swipeRightEl) {
             if (deltaX > DIRECTION_LOCK_PX) {
               swipeRightEl.classList.add('visible');
@@ -208,28 +232,24 @@ export function createTerminal(container, { session, fontSize = 14 }) {
       }, { passive: false });
 
       screen.addEventListener('touchend', (e) => {
-        // --- Pinch end ---
         if (pinchStartDist !== null && e.touches.length < 2) {
           pinchStartDist = null;
           pinchStartFontSize = null;
           return;
         }
 
-        // --- Swipe end: check if threshold was met ---
         if (gestureDirection === 'swipe' && touchStartX !== null) {
           const endX = e.changedTouches[0]?.clientX ?? touchStartX;
           const deltaX = endX - touchStartX;
           const screenWidth = window.innerWidth;
 
           if (Math.abs(deltaX) > screenWidth * SWIPE_THRESHOLD) {
-            // Trigger session switch
             container.dispatchEvent(new CustomEvent('swipe-session', {
               detail: { direction: deltaX > 0 ? 'next' : 'prev' },
             }));
           }
         }
 
-        // Hide arrows
         if (swipeLeftEl) swipeLeftEl.classList.remove('visible');
         if (swipeRightEl) swipeRightEl.classList.remove('visible');
 
@@ -255,13 +275,14 @@ export function createTerminal(container, { session, fontSize = 14 }) {
   }
 
   function sendKeys(seq) {
-    if (ws.readyState === WebSocket.OPEN) {
+    if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(seq);
     }
   }
 
   function switchWindow(targetSession, windowIndex) {
-    if (ws.readyState === WebSocket.OPEN) {
+    currentSession = targetSession;
+    if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({
         type: 'switch',
         session: targetSession,
@@ -271,7 +292,7 @@ export function createTerminal(container, { session, fontSize = 14 }) {
   }
 
   function newWindow(targetSession) {
-    if (ws.readyState === WebSocket.OPEN) {
+    if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({
         type: 'new-window',
         session: targetSession,
@@ -280,10 +301,12 @@ export function createTerminal(container, { session, fontSize = 14 }) {
   }
 
   function dispose() {
+    intentionalClose = true;
+    if (reconnectTimer) clearTimeout(reconnectTimer);
     resizeObserver.disconnect();
-    ws.close();
+    if (ws) ws.close();
     term.dispose();
   }
 
-  return { term, ws, fitAddon, searchAddon, setFontSize, sendKeys, switchWindow, newWindow, dispose };
+  return { term, fitAddon, searchAddon, setFontSize, sendKeys, switchWindow, newWindow, dispose };
 }

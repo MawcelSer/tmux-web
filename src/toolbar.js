@@ -1,37 +1,34 @@
 /** Key label → escape sequence mapping for the mobile toolbar. */
 export const KEYS = {
-  'Ctrl+b': '\x02',
-  'Esc': '\x1b',
-  'Tab': '\t',
+  'ESC': '\x1b',
+  'TAB': '\t',
+  '-': '-',
+  '/': '/',
+  '|': '|',
+  '_': '_',
+  '~': '~',
+  '←': '\x1b[D',
   '↑': '\x1b[A',
   '↓': '\x1b[B',
   '→': '\x1b[C',
-  '←': '\x1b[D',
-  'PgUp': '\x1b[5~',
-  'PgDn': '\x1b[6~',
-  'Home': '\x1b[H',
-  'End': '\x1b[F',
-  'Ctrl+C': '\x03',
-  'Ctrl+D': '\x04',
-  'Ctrl+Z': '\x1a',
+  'PGUP': '\x1b[5~',
+  'PGDN': '\x1b[6~',
+  'HOME': '\x1b[H',
+  'END': '\x1b[F',
 };
 
-/** Tmux prefix keys (shown after Ctrl+b is pressed). */
-export const TMUX_PREFIX_KEYS = ['%', '"', 'd', 'n', 'p', '[', ']', 'c', 'z', 'x', '&', ',', 's', 'w'];
-
-/** Get the escape sequence or literal character for a key label. */
+/** Get the escape sequence for a key label. */
 export function getKeySequence(label) {
-  if (KEYS[label] !== undefined) return KEYS[label];
-  if (TMUX_PREFIX_KEYS.includes(label)) return label;
-  return undefined;
+  return KEYS[label];
 }
 
 /**
- * Create and mount the toolbar DOM — compact, single-row, scrollable,
- * styled like JuiceSSH / Termius extra-keys bar.
+ * Create and mount the toolbar DOM — JuiceSSH-style extra keys bar
+ * with CTRL/ALT as sticky toggle modifiers.
  */
 export function createToolbar(container, { onKey, onIncrease, onDecrease }) {
-  let prefixMode = false;
+  let ctrlActive = false;
+  let altActive = false;
 
   const toolbar = document.createElement('div');
   toolbar.className = 'toolbar';
@@ -40,75 +37,6 @@ export function createToolbar(container, { onKey, onIncrease, onDecrease }) {
     const s = document.createElement('span');
     s.className = 'toolbar-sep';
     return s;
-  }
-
-  function renderButtons() {
-    toolbar.innerHTML = '';
-
-    if (prefixMode) {
-      const label = document.createElement('span');
-      label.className = 'toolbar-prefix-label';
-      label.textContent = 'C-b';
-      toolbar.appendChild(label);
-
-      for (const key of TMUX_PREFIX_KEYS) {
-        toolbar.appendChild(makeButton(key, () => {
-          onKey(key);
-          prefixMode = false;
-          renderButtons();
-        }));
-      }
-
-      toolbar.appendChild(sep());
-      const cancel = makeButton('ESC', () => {
-        prefixMode = false;
-        renderButtons();
-      });
-      cancel.classList.add('toolbar-cancel', 'toolbar-btn-wide');
-      toolbar.appendChild(cancel);
-    } else {
-      // Prefix toggle
-      const ctrlB = makeButton('C-b', () => {
-        onKey(KEYS['Ctrl+b']);
-        prefixMode = true;
-        renderButtons();
-      }, 'toolbar-prefix-btn toolbar-btn-wide');
-      toolbar.appendChild(ctrlB);
-
-      toolbar.appendChild(sep());
-
-      // Navigation
-      for (const key of ['Esc', 'Tab']) {
-        toolbar.appendChild(makeButton(key, () => onKey(KEYS[key]), 'toolbar-btn-wide'));
-      }
-
-      toolbar.appendChild(sep());
-
-      // Arrows
-      for (const key of ['←', '↑', '↓', '→']) {
-        toolbar.appendChild(makeButton(key, () => onKey(KEYS[key]), 'toolbar-btn-arrow'));
-      }
-
-      toolbar.appendChild(sep());
-
-      // Page nav
-      for (const key of ['PgUp', 'PgDn']) {
-        toolbar.appendChild(makeButton(key, () => onKey(KEYS[key]), 'toolbar-btn-wide'));
-      }
-
-      toolbar.appendChild(sep());
-
-      // Ctrl combos
-      toolbar.appendChild(makeButton('C-c', () => onKey(KEYS['Ctrl+C']), 'toolbar-btn-wide'));
-      toolbar.appendChild(makeButton('C-d', () => onKey(KEYS['Ctrl+D']), 'toolbar-btn-wide'));
-      toolbar.appendChild(makeButton('C-z', () => onKey(KEYS['Ctrl+Z']), 'toolbar-btn-wide'));
-
-      toolbar.appendChild(sep());
-
-      // Font size
-      toolbar.appendChild(makeButton('A-', onDecrease, 'toolbar-font'));
-      toolbar.appendChild(makeButton('A+', onIncrease, 'toolbar-font'));
-    }
   }
 
   function makeButton(label, onClick, extraClass = '') {
@@ -126,8 +54,69 @@ export function createToolbar(container, { onKey, onIncrease, onDecrease }) {
     return btn;
   }
 
-  renderButtons();
+  // ESC
+  toolbar.appendChild(makeButton('ESC', () => onKey(KEYS['ESC']), 'toolbar-btn-wide'));
+
+  toolbar.appendChild(sep());
+
+  // CTRL toggle
+  const ctrlBtn = makeButton('CTRL', () => {
+    ctrlActive = !ctrlActive;
+    ctrlBtn.classList.toggle('active', ctrlActive);
+  }, 'toolbar-mod');
+  toolbar.appendChild(ctrlBtn);
+
+  // ALT toggle
+  const altBtn = makeButton('ALT', () => {
+    altActive = !altActive;
+    altBtn.classList.toggle('active', altActive);
+  }, 'toolbar-mod');
+  toolbar.appendChild(altBtn);
+
+  toolbar.appendChild(sep());
+
+  // TAB
+  toolbar.appendChild(makeButton('TAB', () => onKey(KEYS['TAB']), 'toolbar-btn-wide'));
+
+  toolbar.appendChild(sep());
+
+  // Special characters
+  for (const ch of ['-', '/', '|', '_', '~']) {
+    toolbar.appendChild(makeButton(ch, () => onKey(ch)));
+  }
+
+  toolbar.appendChild(sep());
+
+  // Arrows
+  for (const key of ['←', '↑', '↓', '→']) {
+    toolbar.appendChild(makeButton(key, () => onKey(KEYS[key]), 'toolbar-btn-arrow'));
+  }
+
+  toolbar.appendChild(sep());
+
+  // Page/position navigation
+  for (const key of ['PGUP', 'PGDN', 'HOME', 'END']) {
+    toolbar.appendChild(makeButton(key, () => onKey(KEYS[key]), 'toolbar-btn-wide'));
+  }
+
+  toolbar.appendChild(sep());
+
+  // Font size
+  toolbar.appendChild(makeButton('A-', onDecrease, 'toolbar-font'));
+  toolbar.appendChild(makeButton('A+', onIncrease, 'toolbar-font'));
+
   container.appendChild(toolbar);
 
-  return { toolbar };
+  function getModifiers() {
+    return { ctrl: ctrlActive, alt: altActive };
+  }
+
+  function clearModifiers() {
+    ctrlActive = false;
+    altActive = false;
+    ctrlBtn.classList.remove('active');
+    altBtn.classList.remove('active');
+  }
+
+  return { toolbar, getModifiers, clearModifiers };
 }

@@ -10,14 +10,25 @@ const initialSession = urlParams.get('session') || '';
 const fontMgr = new FontSizeManager();
 
 const termContainer = document.getElementById('terminal-container');
+
+// Toolbar ref (assigned after createToolbar, used lazily in onDataTransform)
+let toolbar;
+
 const terminal = createTerminal(termContainer, {
   session: initialSession,
   fontSize: fontMgr.get(),
+  onDataTransform: (data) => {
+    if (!toolbar) return data;
+    const { ctrl, alt } = toolbar.getModifiers();
+    if (!ctrl && !alt) return data;
+    toolbar.clearModifiers();
+    return applyModifiers(data, ctrl, alt);
+  },
 });
 
 fontMgr.onChange((size) => terminal.setFontSize(size));
 
-createToolbar(document.getElementById('toolbar-container'), {
+toolbar = createToolbar(document.getElementById('toolbar-container'), {
   onKey: (seq) => terminal.sendKeys(seq),
   onIncrease: () => fontMgr.increase(),
   onDecrease: () => fontMgr.decrease(),
@@ -60,7 +71,6 @@ if (initialSession) {
   switcher.setCurrentSession(initialSession);
 }
 
-// Fetch session list on startup for swipe navigation
 refreshSessionList();
 
 // --- Tap terminal = close switcher panel + focus ---
@@ -71,11 +81,9 @@ termContainer.addEventListener('click', () => {
 
 // --- Swipe to switch sessions ---
 termContainer.addEventListener('swipe-session', async (e) => {
-  // Refresh list to catch new sessions
   await refreshSessionList();
   if (sessionList.length < 2) return;
 
-  // Find current index
   let idx = currentSessionIndex;
   if (idx < 0) idx = 0;
 
@@ -106,4 +114,20 @@ if (window.visualViewport) {
   };
   window.visualViewport.addEventListener('resize', onViewportResize);
   window.visualViewport.addEventListener('scroll', onViewportResize);
+}
+
+/** Apply CTRL/ALT modifiers to terminal input. */
+function applyModifiers(data, ctrl, alt) {
+  let result = data;
+  if (ctrl && data.length === 1) {
+    const code = data.charCodeAt(0);
+    if (code >= 97 && code <= 122) result = String.fromCharCode(code - 96);       // a-z
+    else if (code >= 65 && code <= 90) result = String.fromCharCode(code - 64);    // A-Z
+    else if (code >= 91 && code <= 95) result = String.fromCharCode(code - 64);    // [\]^_
+    else if (code === 32) result = '\x00';                                          // space
+  }
+  if (alt) {
+    result = '\x1b' + result;
+  }
+  return result;
 }
