@@ -150,11 +150,10 @@ export function createTerminal(container, { session, fontSize = 14, onDataTransf
   });
 
   // --- Touch gestures ---
-  // Handles: tap (move cursor), scroll, swipe, pinch
+  // Handles: scroll, swipe, pinch. Taps flow through to browser (click synthesis).
   {
     let touchStartY = null;
     let touchStartX = null;
-    let touchStartTime = null;
     let scrollAccumulator = 0;
     let lastScrollSend = 0;
     let gestureDirection = null; // null | 'scroll' | 'swipe'
@@ -162,8 +161,6 @@ export function createTerminal(container, { session, fontSize = 14, onDataTransf
     const SCROLL_THROTTLE_MS = 60;
     const SWIPE_THRESHOLD = 0.4;
     const DIRECTION_LOCK_PX = 10;
-    const TAP_MAX_MS = 300;
-    const TAP_MAX_PX = 5;
 
     let scrollDrainTimer = null;
     let pinchStartDist = null;
@@ -171,30 +168,6 @@ export function createTerminal(container, { session, fontSize = 14, onDataTransf
 
     const swipeLeftEl = document.getElementById('swipe-left');
     const swipeRightEl = document.getElementById('swipe-right');
-
-    // Convert pixel coordinates to terminal cell
-    function coordsToCell(clientX, clientY) {
-      const screen = container.querySelector('.xterm-screen');
-      if (!screen) return null;
-      const rect = screen.getBoundingClientRect();
-      const cellWidth = rect.width / term.cols;
-      const cellHeight = rect.height / term.rows;
-      const col = Math.max(0, Math.min(term.cols - 1, Math.floor((clientX - rect.left) / cellWidth)));
-      const row = Math.max(0, Math.min(term.rows - 1, Math.floor((clientY - rect.top) / cellHeight)));
-      return { col, row };
-    }
-
-    // Tap-to-move: send arrow keys to reach target column on cursor's row
-    function moveCursorTo(col, viewportRow) {
-      if (term.buffer.active.viewportY !== term.buffer.active.baseY) return;
-      if (viewportRow !== term.buffer.active.cursorY) return;
-
-      const delta = col - term.buffer.active.cursorX;
-      if (delta === 0) return;
-
-      const arrow = delta > 0 ? '\x1b[C' : '\x1b[D';
-      sendKeys(arrow.repeat(Math.abs(delta)));
-    }
 
     function flushScroll() {
       const lines = Math.trunc(scrollAccumulator / PX_PER_LINE);
@@ -229,8 +202,9 @@ export function createTerminal(container, { session, fontSize = 14, onDataTransf
       }
     }
 
-    // Attach on the container (parent) with capture so we intercept
-    // touch events BEFORE xterm.js sees them on .xterm-screen.
+    // Capture-phase listeners intercept before xterm.js sees them.
+    // Single-finger touchstart is NOT prevented — lets xterm.js track focus
+    // and lets the browser synthesize click events for taps.
     container.addEventListener('touchstart', (e) => {
       if (e.touches.length === 2) {
         pinchStartDist = getTouchDistance(e.touches);
@@ -244,12 +218,10 @@ export function createTerminal(container, { session, fontSize = 14, onDataTransf
       if (e.touches.length === 1) {
         touchStartY = e.touches[0].clientY;
         touchStartX = e.touches[0].clientX;
-        touchStartTime = Date.now();
         scrollAccumulator = 0;
         stopScrollDrain();
         gestureDirection = null;
-        e.preventDefault();
-        e.stopPropagation();
+        // Do NOT preventDefault/stopPropagation — let the event flow through
       }
     }, { capture: true, passive: false });
 
@@ -274,12 +246,16 @@ export function createTerminal(container, { session, fontSize = 14, onDataTransf
       const deltaY = touchStartY - currentY;
       const deltaX = currentX - touchStartX;
 
-      // Lock direction on first significant movement
-      if (gestureDirection === null && (Math.abs(deltaY) > DIRECTION_LOCK_PX || Math.abs(deltaX) > DIRECTION_LOCK_PX)) {
-        if (Math.abs(deltaX) > Math.abs(deltaY) * 1.5) {
-          gestureDirection = 'swipe';
+      // Before direction lock: let events flow through (first ~10px of movement)
+      if (gestureDirection === null) {
+        if (Math.abs(deltaY) > DIRECTION_LOCK_PX || Math.abs(deltaX) > DIRECTION_LOCK_PX) {
+          if (Math.abs(deltaX) > Math.abs(deltaY) * 1.5) {
+            gestureDirection = 'swipe';
+          } else {
+            gestureDirection = 'scroll';
+          }
         } else {
-          gestureDirection = 'scroll';
+          return; // Not enough movement yet — let event flow
         }
       }
 
@@ -324,6 +300,7 @@ export function createTerminal(container, { session, fontSize = 14, onDataTransf
       if (pinchStartDist !== null && e.touches.length < 2) {
         pinchStartDist = null;
         pinchStartFontSize = null;
+        e.preventDefault();
         e.stopPropagation();
         return;
       }
@@ -341,27 +318,15 @@ export function createTerminal(container, { session, fontSize = 14, onDataTransf
         }
       }
 
-      // --- Quick tap: move cursor to tapped position + re-focus ---
-      if (gestureDirection === null && touchStartTime) {
-        const duration = Date.now() - touchStartTime;
-        const endTouch = e.changedTouches[0];
-        if (endTouch && touchStartX !== null && touchStartY !== null) {
-          const dx = Math.abs(endTouch.clientX - touchStartX);
-          const dy = Math.abs(endTouch.clientY - touchStartY);
-          if (duration < TAP_MAX_MS && dx < TAP_MAX_PX && dy < TAP_MAX_PX) {
-            const cell = coordsToCell(endTouch.clientX, endTouch.clientY);
-            if (cell) {
-              moveCursorTo(cell.col, cell.row);
-            }
-            term.focus();
-          }
+      // If a gesture was active, suppress the browser's click synthesis
+      if (gestureDirection !== null) {
+        // Flush any remaining scroll before resetting
+        if (gestureDirection === 'scroll') {
+          flushScroll();
         }
+        e.preventDefault();
       }
-
-      // Flush any remaining scroll before resetting
-      if (gestureDirection === 'scroll') {
-        flushScroll();
-      }
+      // If no gesture (tap): let event flow — browser synthesizes click
 
       // Hide arrows
       if (swipeLeftEl) swipeLeftEl.classList.remove('visible');
@@ -369,10 +334,8 @@ export function createTerminal(container, { session, fontSize = 14, onDataTransf
 
       touchStartY = null;
       touchStartX = null;
-      touchStartTime = null;
       scrollAccumulator = 0;
       gestureDirection = null;
-      e.stopPropagation();
     }, { capture: true, passive: false });
   }
 

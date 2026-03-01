@@ -176,6 +176,7 @@ body {
   overflow: hidden;
   position: relative;
   min-height: 0;
+  touch-action: none;
 }
 
 #terminal-container .xterm {
@@ -224,8 +225,8 @@ body {
   font-size: 11px;
   cursor: pointer;
   touch-action: manipulation;
-  min-width: 32px;
-  height: 28px;
+  min-width: 38px;
+  height: 38px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -246,7 +247,7 @@ body {
 }
 
 .toolbar-btn-arrow {
-  min-width: 28px;
+  min-width: 38px;
   font-size: 13px;
   padding: 0;
 }
@@ -284,13 +285,13 @@ body {
 /* === Responsive === */
 @media (max-width: 400px) {
   .toolbar-btn {
-    min-width: 28px;
-    height: 26px;
+    min-width: 34px;
+    height: 34px;
     font-size: 10px;
   }
 
   .toolbar-btn-arrow {
-    min-width: 26px;
+    min-width: 34px;
   }
 
   .topbar-btn {
@@ -311,8 +312,8 @@ body {
   }
 
   .toolbar-btn {
-    height: 24px;
-    min-width: 26px;
+    height: 30px;
+    min-width: 30px;
     font-size: 10px;
   }
 }
