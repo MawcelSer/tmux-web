@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <title>TmuxWeb</title>
+  <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+  <!-- Top bar -->
+  <header id="topbar">
+    <button id="btn-sessions" class="topbar-btn">Sessions</button>
+    <span id="current-session">—</span>
+    <button id="btn-windows" class="topbar-btn">Windows</button>
+  </header>
+
+  <!-- Session/Window switcher panel -->
+  <div id="switcher-panel" class="switcher-panel hidden">
+    <div class="switcher-header">
+      <span id="switcher-title">Sessions</span>
+      <button id="switcher-close" class="switcher-close">&times;</button>
+    </div>
+    <ul id="switcher-list" class="switcher-list"></ul>
+  </div>
+
+  <!-- Terminal area -->
+  <div id="terminal-container"></div>
+
+  <!-- Bottom toolbar -->
+  <div id="toolbar-container"></div>
+
+  <script type="module" src="./main.js"></script>
+</body>
+</html>
