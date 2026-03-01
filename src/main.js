@@ -65,6 +65,34 @@ const switcher = createSessionSwitcher({
   onNewWindow: (session) => {
     terminal.newWindow(session);
   },
+  onNewSession: (name) => {
+    terminal.newSession(name);
+    setTimeout(async () => {
+      await refreshSessionList();
+      if (sessionList.includes(name)) {
+        terminal.switchWindow(name, null);
+        switcher.setCurrentSession(name);
+        currentSessionIndex = sessionList.indexOf(name);
+      }
+    }, 300);
+  },
+  onKillSession: (name, isCurrentSession) => {
+    terminal.killSession(name);
+    if (isCurrentSession) {
+      setTimeout(async () => {
+        await refreshSessionList();
+        if (sessionList.length > 0) {
+          const target = sessionList[0];
+          terminal.switchWindow(target, null);
+          switcher.setCurrentSession(target);
+          currentSessionIndex = 0;
+        }
+      }, 300);
+    }
+  },
+  onKillWindow: (session, windowIndex) => {
+    terminal.killWindow(session, windowIndex);
+  },
 });
 
 if (initialSession) {

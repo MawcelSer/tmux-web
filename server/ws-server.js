@@ -84,16 +84,27 @@ export function createServer({
   });
 
   const wss = new WebSocketServer({ server: httpServer, path: '/ws' });
+  const activeSessions = new Map();
 
   wss.on('connection', (ws, req) => {
     const url = new URL(req.url, `http://${req.headers.host}`);
     const session = url.searchParams.get('session') || '';
+
+    // Kill old PTY bridge for the same session to prevent duplicate clients
+    if (session && activeSessions.has(session)) {
+      const old = activeSessions.get(session);
+      old.pty.kill();
+      if (old.ws.readyState <= 1) old.ws.close(1000, 'Replaced by new connection');
+      activeSessions.delete(session);
+    }
 
     const pty = createPtyFn({
       session,
       cols: 80,
       rows: 24,
     });
+
+    if (session) activeSessions.set(session, { ws, pty });
 
     // Coalesce PTY output using setImmediate: batches data from the same
     // event loop tick into one WebSocket send. ~0ms latency for isolated
@@ -146,6 +157,28 @@ export function createServer({
             execFile('tmux', ['new-window', '-t', parsed.session], () => {});
             return;
           }
+          if (parsed.type === 'new-session') {
+            const name = parsed.name;
+            if (!name || !/^[\w\-. ]+$/.test(name)) return;
+            execFile('tmux', ['new-session', '-d', '-s', name], () => {});
+            return;
+          }
+          if (parsed.type === 'kill-session') {
+            const name = parsed.name;
+            if (!name || !/^[\w\-. ]+$/.test(name)) return;
+            execFile('tmux', ['kill-session', '-t', name], () => {});
+            return;
+          }
+          if (parsed.type === 'kill-window') {
+            const sessionName = parsed.session;
+            const winIndex = parsed.window;
+            if (!sessionName || !/^[\w\-. ]+$/.test(sessionName)) return;
+            if (!Number.isInteger(winIndex) || winIndex < 0) return;
+            execFile('tmux', ['kill-window', '-t', `${sessionName}:${winIndex}`], () => {});
+            return;
+          }
+          // Any JSON with a 'type' field is a control message — never forward to terminal
+          if (parsed.type) return;
         } catch {
           // Malformed JSON, fall through to treat as terminal input
         }
@@ -158,6 +191,9 @@ export function createServer({
     ws.on('close', () => {
       sendBuf = [];
       pty.kill();
+      if (session && activeSessions.get(session)?.ws === ws) {
+        activeSessions.delete(session);
+      }
     });
   });
 

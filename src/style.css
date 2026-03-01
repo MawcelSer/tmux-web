@@ -282,6 +282,70 @@ body {
   border-color: #30363d;
 }
 
+/* === Session Management === */
+.switcher-new-session {
+  color: #58a6ff;
+  font-weight: 600;
+}
+
+.switcher-new-session:active {
+  background: #21262d;
+}
+
+.switcher-input {
+  background: #0d1117;
+  color: #c9d1d9;
+  border: 1px solid #30363d;
+  border-radius: 4px;
+  padding: 4px 8px;
+  font-size: 13px;
+  flex: 1;
+  min-width: 0;
+  outline: none;
+  margin-right: 6px;
+}
+
+.switcher-input:focus {
+  border-color: #1f6feb;
+}
+
+.switcher-confirm-btn {
+  background: #238636;
+  color: #fff;
+  border: 1px solid #2ea043;
+  border-radius: 4px;
+  padding: 4px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+  min-height: 28px;
+}
+
+.switcher-confirm-btn:active {
+  background: #2ea043;
+}
+
+.switcher-kill-btn {
+  background: #da3633;
+  color: #fff;
+  border: 1px solid #f85149;
+  border-radius: 4px;
+  padding: 2px 8px;
+  font-size: 11px;
+  cursor: pointer;
+  white-space: nowrap;
+  min-height: 26px;
+}
+
+.switcher-kill-btn:active {
+  background: #f85149;
+}
+
+.switcher-kill-btn.hidden,
+.badge.hidden {
+  display: none;
+}
+
 /* === Responsive === */
 @media (max-width: 400px) {
   .toolbar-btn {

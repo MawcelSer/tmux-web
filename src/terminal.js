@@ -45,6 +45,15 @@ export function createTerminal(container, { session, fontSize = 14, onDataTransf
 
   term.open(container);
 
+  // Disable mobile keyboard autocapitalize/autocorrect for terminal input
+  const helperTextarea = container.querySelector('.xterm-helper-textarea');
+  if (helperTextarea) {
+    helperTextarea.setAttribute('autocapitalize', 'off');
+    helperTextarea.setAttribute('autocorrect', 'off');
+    helperTextarea.setAttribute('autocomplete', 'off');
+    helperTextarea.setAttribute('spellcheck', 'false');
+  }
+
   requestAnimationFrame(() => {
     fitAddon.fit();
   });
@@ -385,6 +394,24 @@ export function createTerminal(container, { session, fontSize = 14, onDataTransf
     }
   }
 
+  function newSession(name) {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'new-session', name }));
+    }
+  }
+
+  function killSession(name) {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'kill-session', name }));
+    }
+  }
+
+  function killWindow(session, windowIndex) {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'kill-window', session, window: windowIndex }));
+    }
+  }
+
   function dispose() {
     intentionalClose = true;
     if (reconnectTimer) clearTimeout(reconnectTimer);
@@ -393,5 +420,5 @@ export function createTerminal(container, { session, fontSize = 14, onDataTransf
     term.dispose();
   }
 
-  return { term, fit, searchAddon, setFontSize, sendKeys, switchWindow, newWindow, dispose };
+  return { term, fit, searchAddon, setFontSize, sendKeys, switchWindow, newWindow, newSession, killSession, killWindow, dispose };
 }
