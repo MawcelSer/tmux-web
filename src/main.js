@@ -45,6 +45,12 @@ async function refreshSessionList() {
     sessionList = data.sessions.map((s) => s.name);
     if (switcher._currentSession) {
       currentSessionIndex = sessionList.indexOf(switcher._currentSession);
+    } else if (data.sessions.length > 0) {
+      // No session selected yet — pick attached session or first available
+      const attached = data.sessions.find((s) => s.attached);
+      const target = attached ? attached.name : data.sessions[0].name;
+      switcher.setCurrentSession(target);
+      currentSessionIndex = sessionList.indexOf(target);
     }
   } catch { /* ignore */ }
 }
