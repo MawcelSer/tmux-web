@@ -4,31 +4,40 @@ import { createToolbar } from './toolbar.js';
 import { FontSizeManager } from './font-size.js';
 import { createSessionSwitcher } from './session-switcher.js';
 
-// Determine initial session from URL hash or default
 const urlParams = new URLSearchParams(location.search);
 const initialSession = urlParams.get('session') || '';
 
-// Font size manager
 const fontMgr = new FontSizeManager();
 
-// Create terminal
 const termContainer = document.getElementById('terminal-container');
 const terminal = createTerminal(termContainer, {
   session: initialSession,
   fontSize: fontMgr.get(),
 });
 
-// Font size → terminal sync
 fontMgr.onChange((size) => terminal.setFontSize(size));
 
-// Toolbar
 createToolbar(document.getElementById('toolbar-container'), {
   onKey: (seq) => terminal.sendKeys(seq),
   onIncrease: () => fontMgr.increase(),
   onDecrease: () => fontMgr.decrease(),
 });
 
-// Session/Window switcher
+// Session list cache for swipe navigation
+let sessionList = [];
+let currentSessionIndex = -1;
+
+async function refreshSessionList() {
+  try {
+    const res = await fetch('/api/sessions');
+    const data = await res.json();
+    sessionList = data.sessions.map((s) => s.name);
+    if (switcher._currentSession) {
+      currentSessionIndex = sessionList.indexOf(switcher._currentSession);
+    }
+  } catch { /* ignore */ }
+}
+
 const switcher = createSessionSwitcher({
   panel: document.getElementById('switcher-panel'),
   list: document.getElementById('switcher-list'),
@@ -39,6 +48,8 @@ const switcher = createSessionSwitcher({
   currentLabel: document.getElementById('current-session'),
   onSwitch: (session, windowIndex) => {
     terminal.switchWindow(session, windowIndex);
+    switcher.setCurrentSession(session);
+    currentSessionIndex = sessionList.indexOf(session);
   },
   onNewWindow: (session) => {
     terminal.newWindow(session);
@@ -49,23 +60,48 @@ if (initialSession) {
   switcher.setCurrentSession(initialSession);
 }
 
-// Focus terminal on tap (helps mobile keyboards)
+// Fetch session list on startup for swipe navigation
+refreshSessionList();
+
+// --- Tap terminal = close switcher panel + focus ---
 termContainer.addEventListener('click', () => {
+  switcher.hide();
   terminal.term.focus();
 });
 
+// --- Swipe to switch sessions ---
+termContainer.addEventListener('swipe-session', async (e) => {
+  // Refresh list to catch new sessions
+  await refreshSessionList();
+  if (sessionList.length < 2) return;
+
+  // Find current index
+  let idx = currentSessionIndex;
+  if (idx < 0) idx = 0;
+
+  if (e.detail.direction === 'next') {
+    idx = (idx + 1) % sessionList.length;
+  } else {
+    idx = (idx - 1 + sessionList.length) % sessionList.length;
+  }
+
+  const target = sessionList[idx];
+  terminal.switchWindow(target, null);
+  switcher.setCurrentSession(target);
+  currentSessionIndex = idx;
+});
+
+// --- Pinch zoom → font size ---
+termContainer.addEventListener('pinch-zoom', (e) => {
+  fontMgr.set(e.detail.fontSize);
+});
+
 // --- Virtual keyboard viewport fix ---
-// Use visualViewport API to shrink the layout when the mobile keyboard opens,
-// so the terminal + toolbar stay above the keyboard instead of being covered.
 if (window.visualViewport) {
   const onViewportResize = () => {
     const vv = window.visualViewport;
-    // Height difference = keyboard height
-    const keyboardOffset = window.innerHeight - vv.height;
     document.body.style.height = `${vv.height}px`;
-    // Scroll the viewport to compensate for any offset
     document.body.style.transform = `translateY(${vv.offsetTop}px)`;
-    // Re-fit terminal to the new size
     terminal.fitAddon.fit();
   };
   window.visualViewport.addEventListener('resize', onViewportResize);

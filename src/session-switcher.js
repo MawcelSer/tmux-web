@@ -100,7 +100,14 @@ export function createSessionSwitcher({ panel, list, title, closeBtn, sessionsBt
     currentLabel.textContent = name || '—';
   }
 
-  return { setCurrentSession, hide, show, loadSessions, loadWindows };
+  return {
+    setCurrentSession,
+    hide,
+    show,
+    loadSessions,
+    loadWindows,
+    get _currentSession() { return currentSession; },
+  };
 }
 
 function esc(str) {

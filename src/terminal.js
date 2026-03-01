@@ -3,35 +3,32 @@ import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import { SearchAddon } from '@xterm/addon-search';
 
-/**
- * Initialize xterm.js terminal and wire it to a WebSocket.
- */
 export function createTerminal(container, { session, fontSize = 14 }) {
   const term = new Terminal({
     fontSize,
     fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'Consolas', monospace",
     theme: {
-      background: '#1a1a2e',
-      foreground: '#e0e0e0',
-      cursor: '#e94560',
-      cursorAccent: '#1a1a2e',
-      selectionBackground: 'rgba(83, 52, 131, 0.5)',
-      black: '#1a1a2e',
-      red: '#e94560',
-      green: '#2ecc71',
-      yellow: '#f1c40f',
-      blue: '#3498db',
-      magenta: '#9b59b6',
-      cyan: '#1abc9c',
-      white: '#e0e0e0',
-      brightBlack: '#555577',
-      brightRed: '#ff6b81',
-      brightGreen: '#44d68f',
-      brightYellow: '#f9e154',
-      brightBlue: '#5dade2',
-      brightMagenta: '#bb8fce',
-      brightCyan: '#48c9b0',
-      brightWhite: '#ffffff',
+      background: '#0d1117',
+      foreground: '#c9d1d9',
+      cursor: '#58a6ff',
+      cursorAccent: '#0d1117',
+      selectionBackground: 'rgba(31, 111, 235, 0.3)',
+      black: '#0d1117',
+      red: '#f85149',
+      green: '#3fb950',
+      yellow: '#d29922',
+      blue: '#58a6ff',
+      magenta: '#bc8cff',
+      cyan: '#39d353',
+      white: '#c9d1d9',
+      brightBlack: '#484f58',
+      brightRed: '#ff7b72',
+      brightGreen: '#56d364',
+      brightYellow: '#e3b341',
+      brightBlue: '#79c0ff',
+      brightMagenta: '#d2a8ff',
+      brightCyan: '#56d364',
+      brightWhite: '#f0f6fc',
     },
     scrollback: 5000,
     cursorBlink: true,
@@ -77,7 +74,6 @@ export function createTerminal(container, { session, fontSize = 14 }) {
     term.write('\r\n\x1b[1;31m[Connection closed]\x1b[0m\r\n');
   });
 
-  // Forward terminal input to WebSocket
   term.onData((data) => {
     if (ws.readyState === WebSocket.OPEN) {
       ws.send(data);
@@ -96,65 +92,161 @@ export function createTerminal(container, { session, fontSize = 14 }) {
     }
   });
 
-  // --- Touch scroll → mouse wheel events for tmux ---
-  // When tmux has `set -g mouse on`, it expects mouse wheel escape sequences
-  // to enter/exit copy (scroll) mode. On mobile, touch events don't produce
-  // wheel events, so we convert touch drag → SGR mouse wheel sequences.
+  // --- Touch gestures ---
+  // Handles: 1-finger vertical = scroll, 1-finger horizontal = swipe session,
+  //          2-finger pinch = zoom font size
   {
     let touchStartY = null;
+    let touchStartX = null;
     let scrollAccumulator = 0;
+    let gestureDirection = null; // null | 'scroll' | 'swipe'
     const PX_PER_LINE = 24;
     const MAX_LINES_PER_FRAME = 5;
+    const SWIPE_THRESHOLD = 0.4; // 40% of screen width to trigger
+    const DIRECTION_LOCK_PX = 10; // pixels to determine scroll vs swipe
 
-    // Attach to the xterm screen element once it exists
-    const attachTouchScroll = () => {
+    // Pinch zoom state
+    let pinchStartDist = null;
+    let pinchStartFontSize = null;
+
+    // Swipe arrow elements
+    const swipeLeftEl = document.getElementById('swipe-left');
+    const swipeRightEl = document.getElementById('swipe-right');
+
+    const attachGestures = () => {
       const screen = container.querySelector('.xterm-screen');
       if (!screen) return;
 
       screen.addEventListener('touchstart', (e) => {
+        if (e.touches.length === 2) {
+          // Pinch start
+          pinchStartDist = getTouchDistance(e.touches);
+          pinchStartFontSize = term.options.fontSize;
+          touchStartY = null; // cancel scroll
+          gestureDirection = null;
+          e.preventDefault();
+          return;
+        }
         if (e.touches.length === 1) {
           touchStartY = e.touches[0].clientY;
+          touchStartX = e.touches[0].clientX;
           scrollAccumulator = 0;
+          gestureDirection = null;
         }
-      }, { passive: true });
+      }, { passive: false });
 
       screen.addEventListener('touchmove', (e) => {
+        // --- Pinch zoom ---
+        if (e.touches.length === 2 && pinchStartDist !== null) {
+          const dist = getTouchDistance(e.touches);
+          const scale = dist / pinchStartDist;
+          const newSize = Math.round(pinchStartFontSize * scale);
+          if (newSize !== term.options.fontSize && newSize >= 6 && newSize <= 32) {
+            // Dispatch to font size manager via custom event
+            container.dispatchEvent(new CustomEvent('pinch-zoom', { detail: { fontSize: newSize } }));
+          }
+          e.preventDefault();
+          return;
+        }
+
+        // --- Single finger: scroll or swipe ---
         if (touchStartY === null || e.touches.length !== 1) return;
 
         const currentY = e.touches[0].clientY;
-        const delta = touchStartY - currentY; // positive = finger moved up = scroll up
-        touchStartY = currentY;
+        const currentX = e.touches[0].clientX;
+        const deltaY = touchStartY - currentY;
+        const deltaX = currentX - touchStartX;
 
-        // Ignore tiny movements (taps)
-        if (Math.abs(delta) < 2) return;
-
-        scrollAccumulator += delta;
-
-        const lines = Math.trunc(scrollAccumulator / PX_PER_LINE);
-        if (lines !== 0) {
-          scrollAccumulator -= lines * PX_PER_LINE;
-          // SGR mouse encoding: \x1b[<button;col;rowM
-          // Natural scrolling: finger up (positive) = wheel down (65),
-          // finger down (negative) = wheel up (64) = see older content
-          const button = lines > 0 ? 65 : 64;
-          const count = Math.min(Math.abs(lines), MAX_LINES_PER_FRAME);
-          const seq = `\x1b[<${button};1;1M`;
-          for (let i = 0; i < count; i++) {
-            sendKeys(seq);
+        // Lock direction on first significant movement
+        if (gestureDirection === null && (Math.abs(deltaY) > DIRECTION_LOCK_PX || Math.abs(deltaX) > DIRECTION_LOCK_PX)) {
+          if (Math.abs(deltaX) > Math.abs(deltaY) * 1.5) {
+            gestureDirection = 'swipe';
+          } else {
+            gestureDirection = 'scroll';
           }
         }
 
-        e.preventDefault();
+        if (gestureDirection === 'swipe') {
+          // Show arrow indicators based on swipe progress
+          const screenWidth = window.innerWidth;
+          const progress = Math.abs(deltaX) / screenWidth;
+
+          if (swipeLeftEl && swipeRightEl) {
+            if (deltaX > DIRECTION_LOCK_PX) {
+              swipeRightEl.classList.add('visible');
+              swipeLeftEl.classList.remove('visible');
+            } else if (deltaX < -DIRECTION_LOCK_PX) {
+              swipeLeftEl.classList.add('visible');
+              swipeRightEl.classList.remove('visible');
+            } else {
+              swipeLeftEl.classList.remove('visible');
+              swipeRightEl.classList.remove('visible');
+            }
+          }
+          e.preventDefault();
+          return;
+        }
+
+        if (gestureDirection === 'scroll') {
+          const delta = touchStartY - currentY;
+          touchStartY = currentY;
+          if (Math.abs(delta) < 2) return;
+
+          scrollAccumulator += delta;
+          const lines = Math.trunc(scrollAccumulator / PX_PER_LINE);
+          if (lines !== 0) {
+            scrollAccumulator -= lines * PX_PER_LINE;
+            const button = lines > 0 ? 65 : 64;
+            const count = Math.min(Math.abs(lines), MAX_LINES_PER_FRAME);
+            const seq = `\x1b[<${button};1;1M`;
+            for (let i = 0; i < count; i++) {
+              sendKeys(seq);
+            }
+          }
+          e.preventDefault();
+        }
       }, { passive: false });
 
-      screen.addEventListener('touchend', () => {
+      screen.addEventListener('touchend', (e) => {
+        // --- Pinch end ---
+        if (pinchStartDist !== null && e.touches.length < 2) {
+          pinchStartDist = null;
+          pinchStartFontSize = null;
+          return;
+        }
+
+        // --- Swipe end: check if threshold was met ---
+        if (gestureDirection === 'swipe' && touchStartX !== null) {
+          const endX = e.changedTouches[0]?.clientX ?? touchStartX;
+          const deltaX = endX - touchStartX;
+          const screenWidth = window.innerWidth;
+
+          if (Math.abs(deltaX) > screenWidth * SWIPE_THRESHOLD) {
+            // Trigger session switch
+            container.dispatchEvent(new CustomEvent('swipe-session', {
+              detail: { direction: deltaX > 0 ? 'next' : 'prev' },
+            }));
+          }
+        }
+
+        // Hide arrows
+        if (swipeLeftEl) swipeLeftEl.classList.remove('visible');
+        if (swipeRightEl) swipeRightEl.classList.remove('visible');
+
         touchStartY = null;
+        touchStartX = null;
         scrollAccumulator = 0;
+        gestureDirection = null;
       }, { passive: true });
     };
 
-    // xterm-screen may not exist immediately, wait a frame
-    requestAnimationFrame(attachTouchScroll);
+    requestAnimationFrame(attachGestures);
+  }
+
+  function getTouchDistance(touches) {
+    const dx = touches[0].clientX - touches[1].clientX;
+    const dy = touches[0].clientY - touches[1].clientY;
+    return Math.sqrt(dx * dx + dy * dy);
   }
 
   function setFontSize(size) {
