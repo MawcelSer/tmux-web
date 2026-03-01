@@ -84,17 +84,17 @@ describe('parseWindows', () => {
 
 describe('listSessions', () => {
   it('executes tmux ls and returns parsed sessions', async () => {
-    const execMock = vi.fn((cmd, cb) => cb(null, 'test: 1 windows (created Mon Jan  6 10:00:00 2025)\n', ''));
-    const result = await listSessions(execMock);
-    expect(execMock).toHaveBeenCalledWith('tmux ls', expect.any(Function));
+    const execFileMock = vi.fn((file, args, cb) => cb(null, 'test: 1 windows (created Mon Jan  6 10:00:00 2025)\n', ''));
+    const result = await listSessions(execFileMock);
+    expect(execFileMock).toHaveBeenCalledWith('tmux', ['ls'], expect.any(Function));
     expect(result).toEqual([
       { name: 'test', windows: 1, created: 'Mon Jan  6 10:00:00 2025', attached: false },
     ]);
   });
 
   it('returns empty array when tmux has no server', async () => {
-    const execMock = vi.fn((cmd, cb) => cb(new Error('exit 1'), '', 'no server running on /tmp/tmux-1000/default'));
-    const result = await listSessions(execMock);
+    const execFileMock = vi.fn((file, args, cb) => cb(new Error('exit 1'), '', 'no server running on /tmp/tmux-1000/default'));
+    const result = await listSessions(execFileMock);
     expect(result).toEqual([]);
   });
 });
@@ -102,16 +102,16 @@ describe('listSessions', () => {
 describe('listWindows', () => {
   it('executes tmux list-windows for a session', async () => {
     const stdout = '0: bash* (1 panes) [80x24] [layout cccc,80x24,0,0] @0 (active)\n';
-    const execMock = vi.fn((cmd, cb) => cb(null, stdout, ''));
-    const result = await listWindows('main', execMock);
-    expect(execMock).toHaveBeenCalledWith('tmux list-windows -t main', expect.any(Function));
+    const execFileMock = vi.fn((file, args, cb) => cb(null, stdout, ''));
+    const result = await listWindows('main', execFileMock);
+    expect(execFileMock).toHaveBeenCalledWith('tmux', ['list-windows', '-t', 'main'], expect.any(Function));
     expect(result).toEqual([
       { index: 0, name: 'bash', active: true, flags: '*' },
     ]);
   });
 
   it('throws when session not found', async () => {
-    const execMock = vi.fn((cmd, cb) => cb(new Error('exit 1'), '', "can't find session: nope"));
-    await expect(listWindows('nope', execMock)).rejects.toThrow("can't find session");
+    const execFileMock = vi.fn((file, args, cb) => cb(new Error('exit 1'), '', "can't find session: nope"));
+    await expect(listWindows('nope', execFileMock)).rejects.toThrow("can't find session");
   });
 });

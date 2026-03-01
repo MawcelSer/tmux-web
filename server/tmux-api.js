@@ -1,4 +1,4 @@
-import { exec as defaultExec } from 'node:child_process';
+import { execFile as defaultExecFile } from 'node:child_process';
 
 /**
  * Parse `tmux ls` stdout into structured session objects.
@@ -6,7 +6,6 @@ import { exec as defaultExec } from 'node:child_process';
  */
 export function parseSessions(stdout) {
   if (!stdout || stdout.includes('no server running') || stdout.includes('error')) {
-    // Check if it's actually valid output that happens to contain these words
     if (!stdout || !stdout.includes(' windows (created ')) return [];
   }
   const sessions = [];
@@ -48,11 +47,11 @@ export function parseWindows(stdout) {
 }
 
 /**
- * List all tmux sessions. Accepts optional exec function for testing.
+ * List all tmux sessions. Uses execFile to prevent command injection.
  */
-export function listSessions(execFn = defaultExec) {
+export function listSessions(execFileFn = defaultExecFile) {
   return new Promise((resolve) => {
-    execFn('tmux ls', (err, stdout, stderr) => {
+    execFileFn('tmux', ['ls'], (err, stdout, stderr) => {
       if (err) {
         resolve(parseSessions(stderr || ''));
         return;
@@ -63,11 +62,11 @@ export function listSessions(execFn = defaultExec) {
 }
 
 /**
- * List windows for a given tmux session. Accepts optional exec function for testing.
+ * List windows for a given tmux session. Uses execFile to prevent command injection.
  */
-export function listWindows(session, execFn = defaultExec) {
+export function listWindows(session, execFileFn = defaultExecFile) {
   return new Promise((resolve, reject) => {
-    execFn(`tmux list-windows -t ${session}`, (err, stdout, stderr) => {
+    execFileFn('tmux', ['list-windows', '-t', session], (err, stdout, stderr) => {
       if (err) {
         reject(new Error(stderr || err.message));
         return;

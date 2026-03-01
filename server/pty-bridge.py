@@ -30,6 +30,12 @@ def set_pty_size(fd, cols, rows):
     fcntl.ioctl(fd, termios.TIOCSWINSZ, winsize)
 
 
+def set_nonblock(fd):
+    """Set a file descriptor to non-blocking mode."""
+    flags = fcntl.fcntl(fd, fcntl.F_GETFL)
+    fcntl.fcntl(fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
+
+
 def main():
     session = sys.argv[1] if len(sys.argv) > 1 else ''
     cols = int(sys.argv[2]) if len(sys.argv) > 2 else 80
@@ -74,65 +80,119 @@ def main():
     # Parent: bridge stdin/stdout <-> master_fd
     os.close(slave_fd)
 
-    # Make stdin non-blocking
     stdin_fd = sys.stdin.fileno()
     stdout_fd = sys.stdout.fileno()
 
-    # Set stdin to raw-ish mode (non-blocking)
-    old_flags = fcntl.fcntl(stdin_fd, fcntl.F_GETFL)
-    fcntl.fcntl(stdin_fd, fcntl.F_SETFL, old_flags | os.O_NONBLOCK)
+    # Make all fds non-blocking so we can drain fully each iteration
+    set_nonblock(stdin_fd)
+    set_nonblock(stdout_fd)
+    set_nonblock(master_fd)
 
-    # Buffer for detecting resize commands in stdin
-    stdin_buf = b''
+    # Use bytearray for O(1) amortized appends instead of bytes O(n) copies
+    stdin_buf = bytearray()
+    output_buf = bytearray()
+
+    def drain_stdout():
+        """Drain output buffer to stdout pipe. Returns False on fatal error."""
+        nonlocal output_buf
+        while output_buf:
+            try:
+                written = os.write(stdout_fd, output_buf)
+                del output_buf[:written]
+            except BlockingIOError:
+                break
+            except OSError:
+                return False
+        return True
+
+    def write_to_pty(data):
+        """Write data to PTY master, handling non-blocking short writes."""
+        mv = memoryview(data)
+        offset = 0
+        while offset < len(mv):
+            try:
+                written = os.write(master_fd, mv[offset:])
+                offset += written
+            except BlockingIOError:
+                break
+            except OSError:
+                break
+        return offset
 
     try:
         while True:
+            read_fds = [master_fd, stdin_fd]
+            write_fds = [stdout_fd] if output_buf else []
+
             try:
-                rlist, _, _ = select.select([master_fd, stdin_fd], [], [], 0.1)
+                rlist, wlist, _ = select.select(read_fds, write_fds, [], 0.1)
             except (select.error, ValueError):
                 break
 
-            if master_fd in rlist:
-                try:
-                    data = os.read(master_fd, 65536)
-                    if not data:
-                        break
-                    os.write(stdout_fd, data)
-                except OSError:
+            # Drain output buffer to stdout when pipe has space
+            if stdout_fd in wlist and output_buf:
+                if not drain_stdout():
                     break
 
+            # Drain ALL available tmux output from master_fd
+            if master_fd in rlist:
+                eof = False
+                while True:
+                    try:
+                        data = os.read(master_fd, 65536)
+                        if not data:
+                            eof = True
+                            break
+                        output_buf.extend(data)
+                    except BlockingIOError:
+                        break
+                    except OSError:
+                        eof = True
+                        break
+                if eof:
+                    break
+                # Safety cap: if Node.js is very slow, don't eat all memory
+                if len(output_buf) > 1048576:
+                    del output_buf[:-524288]
+
+                # Immediately try to drain new output to stdout (saves one
+                # select iteration of latency for the common case)
+                drain_stdout()
+
+            # Read user input from stdin
             if stdin_fd in rlist:
                 try:
                     data = os.read(stdin_fd, 65536)
                     if not data:
                         break
+                except BlockingIOError:
+                    data = None
                 except OSError:
                     break
 
-                # Process data, looking for resize commands
-                stdin_buf += data
-                while stdin_buf:
-                    idx = stdin_buf.find(b'\x00R')
-                    if idx == -1:
-                        # No resize marker — send everything to PTY
-                        os.write(master_fd, stdin_buf)
-                        stdin_buf = b''
-                        break
-                    if idx > 0:
-                        # Send data before the marker to PTY
-                        os.write(master_fd, stdin_buf[:idx])
-                        stdin_buf = stdin_buf[idx:]
-                    # Check if we have a complete resize command
-                    if len(stdin_buf) >= RESIZE_CMD_LEN:
-                        new_cols = struct.unpack('>H', stdin_buf[2:4])[0]
-                        new_rows = struct.unpack('>H', stdin_buf[4:6])[0]
-                        set_pty_size(master_fd, new_cols, new_rows)
-                        # Send SIGWINCH to the child process group
-                        os.kill(pid, signal.SIGWINCH)
-                        stdin_buf = stdin_buf[RESIZE_CMD_LEN:]
-                    else:
-                        # Incomplete command, wait for more data
-                        break
+                if data:
+                    stdin_buf.extend(data)
+                    while stdin_buf:
+                        idx = stdin_buf.find(b'\x00R')
+                        if idx == -1:
+                            written = write_to_pty(stdin_buf)
+                            del stdin_buf[:written]
+                            break
+                        if idx > 0:
+                            written = write_to_pty(memoryview(stdin_buf)[:idx])
+                            del stdin_buf[:written]
+                            if written < idx:
+                                break  # PTY buffer full, retry next iteration
+                            continue
+                        # Check if we have a complete resize command
+                        if len(stdin_buf) >= RESIZE_CMD_LEN:
+                            new_cols = struct.unpack('>H', bytes(stdin_buf[2:4]))[0]
+                            new_rows = struct.unpack('>H', bytes(stdin_buf[4:6]))[0]
+                            set_pty_size(master_fd, new_cols, new_rows)
+                            os.kill(pid, signal.SIGWINCH)
+                            del stdin_buf[:RESIZE_CMD_LEN]
+                        else:
+                            break
 
             # Check if child is still alive
             result = os.waitpid(pid, os.WNOHANG)
@@ -142,6 +202,11 @@ def main():
     except KeyboardInterrupt:
         pass
     finally:
+        if output_buf:
+            try:
+                os.write(stdout_fd, bytes(output_buf))
+            except OSError:
+                pass
         try:
             os.kill(pid, signal.SIGTERM)
         except ProcessLookupError:

@@ -10,6 +10,7 @@ function mockSpawn() {
     stdin: {
       write: vi.fn((data) => stdinChunks.push(data)),
       end: vi.fn(),
+      destroyed: false,
     },
     stdout: {
       on: vi.fn((event, cb) => {
@@ -21,6 +22,7 @@ function mockSpawn() {
     },
     on: vi.fn((event, cb) => {
       if (event === 'exit') exitCallbacks.push(cb);
+      // 'error' handler registered but not tracked in tests
     }),
     kill: vi.fn(),
     pid: 12345,

@@ -103,6 +103,10 @@ export function createTerminal(container, { session, fontSize = 14, onDataTransf
         clearTimeout(reconnectTimer);
         reconnectTimer = null;
       }
+      // Close any lingering connection in CONNECTING or CLOSING state
+      if (ws && ws.readyState !== WebSocket.CLOSED) {
+        ws.close();
+      }
       reconnectDelay = 1000;
       connect();
     }
@@ -152,13 +156,16 @@ export function createTerminal(container, { session, fontSize = 14, onDataTransf
     let touchStartX = null;
     let touchStartTime = null;
     let scrollAccumulator = 0;
+    let lastScrollSend = 0;
     let gestureDirection = null; // null | 'scroll' | 'swipe'
-    const PX_PER_LINE = 18;
+    const PX_PER_LINE = 20;
+    const SCROLL_THROTTLE_MS = 60;
     const SWIPE_THRESHOLD = 0.4;
     const DIRECTION_LOCK_PX = 10;
     const TAP_MAX_MS = 300;
     const TAP_MAX_PX = 5;
 
+    let scrollDrainTimer = null;
     let pinchStartDist = null;
     let pinchStartFontSize = null;
 
@@ -189,141 +196,184 @@ export function createTerminal(container, { session, fontSize = 14, onDataTransf
       sendKeys(arrow.repeat(Math.abs(delta)));
     }
 
-    const attachGestures = () => {
-      const screen = container.querySelector('.xterm-screen');
-      if (!screen) return;
+    function flushScroll() {
+      const lines = Math.trunc(scrollAccumulator / PX_PER_LINE);
+      if (lines === 0) {
+        stopScrollDrain();
+        return;
+      }
+      // Cap lines per flush to avoid flooding tmux with redraws
+      const sign = lines > 0 ? 1 : -1;
+      const capped = Math.min(Math.abs(lines), 5);
+      scrollAccumulator -= sign * capped * PX_PER_LINE;
+      const button = sign > 0 ? 65 : 64;
+      sendKeys(`\x1b[<${button};1;1M`.repeat(capped));
+      // If there's still accumulated scroll, keep draining
+      if (Math.abs(scrollAccumulator) >= PX_PER_LINE) {
+        startScrollDrain();
+      } else {
+        stopScrollDrain();
+      }
+    }
 
-      screen.addEventListener('touchstart', (e) => {
-        if (e.touches.length === 2) {
-          pinchStartDist = getTouchDistance(e.touches);
-          pinchStartFontSize = term.options.fontSize;
-          touchStartY = null;
-          gestureDirection = null;
-          e.preventDefault();
-          return;
-        }
-        if (e.touches.length === 1) {
-          touchStartY = e.touches[0].clientY;
-          touchStartX = e.touches[0].clientX;
-          touchStartTime = Date.now();
-          scrollAccumulator = 0;
-          gestureDirection = null;
-        }
-      }, { passive: false });
+    function startScrollDrain() {
+      if (!scrollDrainTimer) {
+        scrollDrainTimer = setInterval(flushScroll, SCROLL_THROTTLE_MS);
+      }
+    }
 
-      screen.addEventListener('touchmove', (e) => {
-        // --- Pinch zoom ---
-        if (e.touches.length === 2 && pinchStartDist !== null) {
-          const dist = getTouchDistance(e.touches);
-          const scale = dist / pinchStartDist;
-          const newSize = Math.round(pinchStartFontSize * scale);
-          if (newSize !== term.options.fontSize && newSize >= 6 && newSize <= 32) {
-            container.dispatchEvent(new CustomEvent('pinch-zoom', { detail: { fontSize: newSize } }));
-          }
-          e.preventDefault();
-          return;
-        }
+    function stopScrollDrain() {
+      if (scrollDrainTimer) {
+        clearInterval(scrollDrainTimer);
+        scrollDrainTimer = null;
+      }
+    }
 
-        if (touchStartY === null || e.touches.length !== 1) return;
-
-        const currentY = e.touches[0].clientY;
-        const currentX = e.touches[0].clientX;
-        const deltaY = touchStartY - currentY;
-        const deltaX = currentX - touchStartX;
-
-        // Lock direction on first significant movement
-        if (gestureDirection === null && (Math.abs(deltaY) > DIRECTION_LOCK_PX || Math.abs(deltaX) > DIRECTION_LOCK_PX)) {
-          if (Math.abs(deltaX) > Math.abs(deltaY) * 1.5) {
-            gestureDirection = 'swipe';
-          } else {
-            gestureDirection = 'scroll';
-          }
-        }
-
-        if (gestureDirection === 'swipe') {
-          if (swipeLeftEl && swipeRightEl) {
-            if (deltaX > DIRECTION_LOCK_PX) {
-              swipeRightEl.classList.add('visible');
-              swipeLeftEl.classList.remove('visible');
-            } else if (deltaX < -DIRECTION_LOCK_PX) {
-              swipeLeftEl.classList.add('visible');
-              swipeRightEl.classList.remove('visible');
-            } else {
-              swipeLeftEl.classList.remove('visible');
-              swipeRightEl.classList.remove('visible');
-            }
-          }
-          e.preventDefault();
-          return;
-        }
-
-        if (gestureDirection === 'scroll') {
-          const delta = touchStartY - currentY;
-          touchStartY = currentY;
-          if (Math.abs(delta) < 2) return;
-
-          scrollAccumulator += delta;
-          const lines = Math.trunc(scrollAccumulator / PX_PER_LINE);
-          if (lines !== 0) {
-            scrollAccumulator -= lines * PX_PER_LINE;
-            // Local scroll: negative = up (older), positive = down (newer)
-            // delta > 0 (finger up) → lines > 0 → scroll down (newer) — natural scrolling
-            term.scrollLines(lines);
-          }
-          e.preventDefault();
-        }
-      }, { passive: false });
-
-      screen.addEventListener('touchend', (e) => {
-        // --- Pinch end ---
-        if (pinchStartDist !== null && e.touches.length < 2) {
-          pinchStartDist = null;
-          pinchStartFontSize = null;
-          return;
-        }
-
-        // --- Swipe end ---
-        if (gestureDirection === 'swipe' && touchStartX !== null) {
-          const endX = e.changedTouches[0]?.clientX ?? touchStartX;
-          const deltaX = endX - touchStartX;
-          const screenWidth = window.innerWidth;
-
-          if (Math.abs(deltaX) > screenWidth * SWIPE_THRESHOLD) {
-            container.dispatchEvent(new CustomEvent('swipe-session', {
-              detail: { direction: deltaX > 0 ? 'next' : 'prev' },
-            }));
-          }
-        }
-
-        // --- Quick tap: move cursor to tapped position ---
-        if (gestureDirection === null && touchStartTime) {
-          const duration = Date.now() - touchStartTime;
-          const endTouch = e.changedTouches[0];
-          if (endTouch && touchStartX !== null && touchStartY !== null) {
-            const dx = Math.abs(endTouch.clientX - touchStartX);
-            const dy = Math.abs(endTouch.clientY - touchStartY);
-            if (duration < TAP_MAX_MS && dx < TAP_MAX_PX && dy < TAP_MAX_PX) {
-              const cell = coordsToCell(endTouch.clientX, endTouch.clientY);
-              if (cell) {
-                moveCursorTo(cell.col, cell.row);
-              }
-            }
-          }
-        }
-
-        // Hide arrows
-        if (swipeLeftEl) swipeLeftEl.classList.remove('visible');
-        if (swipeRightEl) swipeRightEl.classList.remove('visible');
-
+    // Attach on the container (parent) with capture so we intercept
+    // touch events BEFORE xterm.js sees them on .xterm-screen.
+    container.addEventListener('touchstart', (e) => {
+      if (e.touches.length === 2) {
+        pinchStartDist = getTouchDistance(e.touches);
+        pinchStartFontSize = term.options.fontSize;
         touchStartY = null;
-        touchStartX = null;
-        touchStartTime = null;
-        scrollAccumulator = 0;
         gestureDirection = null;
-      }, { passive: true });
-    };
+        e.preventDefault();
+        e.stopPropagation();
+        return;
+      }
+      if (e.touches.length === 1) {
+        touchStartY = e.touches[0].clientY;
+        touchStartX = e.touches[0].clientX;
+        touchStartTime = Date.now();
+        scrollAccumulator = 0;
+        stopScrollDrain();
+        gestureDirection = null;
+        e.preventDefault();
+        e.stopPropagation();
+      }
+    }, { capture: true, passive: false });
 
-    requestAnimationFrame(attachGestures);
+    container.addEventListener('touchmove', (e) => {
+      // --- Pinch zoom ---
+      if (e.touches.length === 2 && pinchStartDist !== null) {
+        const dist = getTouchDistance(e.touches);
+        const scale = dist / pinchStartDist;
+        const newSize = Math.round(pinchStartFontSize * scale);
+        if (newSize !== term.options.fontSize && newSize >= 6 && newSize <= 32) {
+          container.dispatchEvent(new CustomEvent('pinch-zoom', { detail: { fontSize: newSize } }));
+        }
+        e.preventDefault();
+        e.stopPropagation();
+        return;
+      }
+
+      if (touchStartY === null || e.touches.length !== 1) return;
+
+      const currentY = e.touches[0].clientY;
+      const currentX = e.touches[0].clientX;
+      const deltaY = touchStartY - currentY;
+      const deltaX = currentX - touchStartX;
+
+      // Lock direction on first significant movement
+      if (gestureDirection === null && (Math.abs(deltaY) > DIRECTION_LOCK_PX || Math.abs(deltaX) > DIRECTION_LOCK_PX)) {
+        if (Math.abs(deltaX) > Math.abs(deltaY) * 1.5) {
+          gestureDirection = 'swipe';
+        } else {
+          gestureDirection = 'scroll';
+        }
+      }
+
+      if (gestureDirection === 'swipe') {
+        if (swipeLeftEl && swipeRightEl) {
+          if (deltaX > DIRECTION_LOCK_PX) {
+            swipeRightEl.classList.add('visible');
+            swipeLeftEl.classList.remove('visible');
+          } else if (deltaX < -DIRECTION_LOCK_PX) {
+            swipeLeftEl.classList.add('visible');
+            swipeRightEl.classList.remove('visible');
+          } else {
+            swipeLeftEl.classList.remove('visible');
+            swipeRightEl.classList.remove('visible');
+          }
+        }
+        e.preventDefault();
+        e.stopPropagation();
+        return;
+      }
+
+      if (gestureDirection === 'scroll') {
+        const delta = touchStartY - currentY;
+        touchStartY = currentY;
+        if (Math.abs(delta) < 2) return;
+
+        scrollAccumulator += delta;
+
+        // Throttle: accumulate movement, flush at most every 60ms
+        const now = Date.now();
+        if (now - lastScrollSend >= SCROLL_THROTTLE_MS) {
+          flushScroll();
+          lastScrollSend = now;
+        }
+        e.preventDefault();
+        e.stopPropagation();
+      }
+    }, { capture: true, passive: false });
+
+    container.addEventListener('touchend', (e) => {
+      // --- Pinch end ---
+      if (pinchStartDist !== null && e.touches.length < 2) {
+        pinchStartDist = null;
+        pinchStartFontSize = null;
+        e.stopPropagation();
+        return;
+      }
+
+      // --- Swipe end ---
+      if (gestureDirection === 'swipe' && touchStartX !== null) {
+        const endX = e.changedTouches[0]?.clientX ?? touchStartX;
+        const deltaX = endX - touchStartX;
+        const screenWidth = window.innerWidth;
+
+        if (Math.abs(deltaX) > screenWidth * SWIPE_THRESHOLD) {
+          container.dispatchEvent(new CustomEvent('swipe-session', {
+            detail: { direction: deltaX > 0 ? 'next' : 'prev' },
+          }));
+        }
+      }
+
+      // --- Quick tap: move cursor to tapped position + re-focus ---
+      if (gestureDirection === null && touchStartTime) {
+        const duration = Date.now() - touchStartTime;
+        const endTouch = e.changedTouches[0];
+        if (endTouch && touchStartX !== null && touchStartY !== null) {
+          const dx = Math.abs(endTouch.clientX - touchStartX);
+          const dy = Math.abs(endTouch.clientY - touchStartY);
+          if (duration < TAP_MAX_MS && dx < TAP_MAX_PX && dy < TAP_MAX_PX) {
+            const cell = coordsToCell(endTouch.clientX, endTouch.clientY);
+            if (cell) {
+              moveCursorTo(cell.col, cell.row);
+            }
+            term.focus();
+          }
+        }
+      }
+
+      // Flush any remaining scroll before resetting
+      if (gestureDirection === 'scroll') {
+        flushScroll();
+      }
+
+      // Hide arrows
+      if (swipeLeftEl) swipeLeftEl.classList.remove('visible');
+      if (swipeRightEl) swipeRightEl.classList.remove('visible');
+
+      touchStartY = null;
+      touchStartX = null;
+      touchStartTime = null;
+      scrollAccumulator = 0;
+      gestureDirection = null;
+      e.stopPropagation();
+    }, { capture: true, passive: false });
   }
 
   function getTouchDistance(touches) {

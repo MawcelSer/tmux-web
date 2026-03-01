@@ -42,13 +42,23 @@ export function createPty({ session = '', cols = 80, rows = 24, spawnFn = defaul
     if (match) clientTty = match[1].trim();
   });
 
+  child.on('error', (err) => {
+    for (const cb of exitCallbacks) cb(1);
+  });
+
   child.on('exit', (code) => {
     for (const cb of exitCallbacks) cb(code);
   });
 
+  function safeWrite(data) {
+    if (!child.stdin.destroyed) {
+      child.stdin.write(data);
+    }
+  }
+
   return {
     write(data) {
-      child.stdin.write(data);
+      safeWrite(data);
     },
 
     resize(newCols, newRows) {
@@ -57,7 +67,7 @@ export function createPty({ session = '', cols = 80, rows = 24, spawnFn = defaul
       buf[1] = 0x52; // 'R'
       buf.writeUInt16BE(newCols, 2);
       buf.writeUInt16BE(newRows, 4);
-      child.stdin.write(buf);
+      safeWrite(buf);
     },
 
     kill() {

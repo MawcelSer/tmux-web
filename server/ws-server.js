@@ -1,15 +1,15 @@
 import http from 'node:http';
 import { readFile } from 'node:fs/promises';
-import { join, extname } from 'node:path';
+import { join, extname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { dirname } from 'node:path';
 import { WebSocketServer } from 'ws';
-import { exec } from 'node:child_process';
+import { execFile } from 'node:child_process';
 import { createPty as defaultCreatePty } from './pty-manager.js';
 import { listSessions as defaultListSessions, listWindows as defaultListWindows } from './tmux-api.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const DIST_DIR = join(__dirname, '..', 'dist');
+const DIST_DIR = resolve(join(__dirname, '..', 'dist'));
 
 const MIME_TYPES = {
   '.html': 'text/html',
@@ -64,7 +64,13 @@ export function createServer({
 
     // Static files from dist/
     let filePath = pathname === '/' ? '/index.html' : pathname;
-    const fullPath = join(DIST_DIR, filePath);
+    const fullPath = resolve(join(DIST_DIR, filePath));
+
+    // Prevent path traversal
+    if (!fullPath.startsWith(DIST_DIR + '/') && fullPath !== DIST_DIR) {
+      sendJson(res, 403, { error: 'Forbidden' });
+      return;
+    }
 
     try {
       const content = await readFile(fullPath);
@@ -89,9 +95,24 @@ export function createServer({
       rows: 24,
     });
 
+    // Coalesce PTY output using setImmediate: batches data from the same
+    // event loop tick into one WebSocket send. ~0ms latency for isolated
+    // events (keystroke echo), effective batching during bursts (scrolling).
+    let sendBuf = [];
+    let sendScheduled = false;
+    function flushSendBuf() {
+      sendScheduled = false;
+      if (sendBuf.length && ws.readyState === 1) {
+        ws.send(Buffer.concat(sendBuf));
+        sendBuf = [];
+      }
+    }
     pty.onData((data) => {
-      if (ws.readyState === 1) {
-        ws.send(data);
+      if (ws.readyState !== 1) return;
+      sendBuf.push(data);
+      if (!sendScheduled) {
+        sendScheduled = true;
+        setImmediate(flushSendBuf);
       }
     });
 
@@ -103,36 +124,39 @@ export function createServer({
 
     ws.on('message', (msg) => {
       const str = msg.toString();
-      // Check for JSON control messages
-      try {
-        const parsed = JSON.parse(str);
-        if (parsed.type === 'resize' && parsed.cols && parsed.rows) {
-          pty.resize(parsed.cols, parsed.rows);
-          return;
-        }
-        if (parsed.type === 'switch') {
-          // Use server-side tmux command targeting the specific client TTY
-          const tty = pty.getTty();
-          const target = parsed.window != null
-            ? `${parsed.session}:${parsed.window}`
-            : parsed.session;
-          if (tty) {
-            exec(`tmux switch-client -c '${tty}' -t '${target}'`, () => {});
+      // Fast path: only attempt JSON parse if message looks like JSON object
+      if (str.charCodeAt(0) === 123) { // '{'
+        try {
+          const parsed = JSON.parse(str);
+          if (parsed.type === 'resize' && parsed.cols && parsed.rows) {
+            pty.resize(parsed.cols, parsed.rows);
+            return;
           }
-          return;
+          if (parsed.type === 'switch') {
+            const tty = pty.getTty();
+            const target = parsed.window != null
+              ? `${parsed.session}:${parsed.window}`
+              : parsed.session;
+            if (tty) {
+              execFile('tmux', ['switch-client', '-c', tty, '-t', target], () => {});
+            }
+            return;
+          }
+          if (parsed.type === 'new-window') {
+            execFile('tmux', ['new-window', '-t', parsed.session], () => {});
+            return;
+          }
+        } catch {
+          // Malformed JSON, fall through to treat as terminal input
         }
-        if (parsed.type === 'new-window') {
-          // Create a new tmux window in the given session
-          exec(`tmux new-window -t '${parsed.session}'`, () => {});
-          return;
-        }
-      } catch {
-        // Not JSON, treat as terminal input
       }
       pty.write(str);
     });
 
+    ws.on('error', () => {});
+
     ws.on('close', () => {
+      sendBuf = [];
       pty.kill();
     });
   });
