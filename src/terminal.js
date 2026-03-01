@@ -125,19 +125,21 @@ export function createTerminal(container, { session, fontSize = 14, onDataTransf
 
   // Send data with optional modifier transform.
   // SwiftKey fires both compositionend and input events for the same
-  // character (especially punctuation), causing xterm's onData to fire
-  // twice within microseconds. Deduplicate single-char sends within 20ms.
-  let lastSentChar = '';
+  // data, causing xterm's onData to fire twice within microseconds.
+  // This happens for single characters AND whole-word composition commits.
+  // Deduplicate any identical send within 10ms (composition dupes are <5ms
+  // apart; key repeats are >=15ms apart, so 10ms is safe).
+  let lastSent = '';
   let lastSentTime = 0;
 
   term.onData((data) => {
     const transformed = onDataTransform ? onDataTransform(data) : data;
     if (ws && ws.readyState === WebSocket.OPEN) {
       const now = performance.now();
-      if (transformed.length === 1 && transformed === lastSentChar && now - lastSentTime < 20) {
+      if (transformed === lastSent && now - lastSentTime < 10) {
         return;
       }
-      lastSentChar = transformed.length === 1 ? transformed : '';
+      lastSent = transformed;
       lastSentTime = now;
       ws.send(transformed);
     }
