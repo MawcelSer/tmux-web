@@ -67,7 +67,10 @@ export function createToolbar(container, { onKey, onIncrease, onDecrease }) {
       onClick();
       if (repeat) {
         repeatTimer = setTimeout(() => {
-          repeatInterval = setInterval(onClick, 80);
+          repeatInterval = setInterval(() => {
+            onClick();
+            if (navigator.vibrate) navigator.vibrate(10);
+          }, 80);
         }, 400);
       }
     });

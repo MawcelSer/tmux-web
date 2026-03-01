@@ -129,25 +129,22 @@ export function createTerminal(container, { session, fontSize = 14, onDataTransf
   });
 
   // --- Touch gestures ---
-  // Handles: tap (move cursor), long-press (select+copy), scroll, swipe, pinch
+  // Handles: tap (move cursor), scroll, swipe, pinch
   {
     let touchStartY = null;
     let touchStartX = null;
     let touchStartTime = null;
     let scrollAccumulator = 0;
-    let gestureDirection = null; // null | 'scroll' | 'swipe' | 'select'
+    let gestureDirection = null; // null | 'scroll' | 'swipe'
     const PX_PER_LINE = 24;
     const MAX_LINES_PER_FRAME = 5;
     const SWIPE_THRESHOLD = 0.4;
     const DIRECTION_LOCK_PX = 10;
-    const LONG_PRESS_MS = 500;
     const TAP_MAX_MS = 300;
     const TAP_MAX_PX = 5;
 
     let pinchStartDist = null;
     let pinchStartFontSize = null;
-    let longPressTimer = null;
-    let selectionAnchor = null; // { col, row (buffer), endCol, endRow }
 
     const swipeLeftEl = document.getElementById('swipe-left');
     const swipeRightEl = document.getElementById('swipe-right');
@@ -164,84 +161,6 @@ export function createTerminal(container, { session, fontSize = 14, onDataTransf
       return { col, row };
     }
 
-    function toBufferRow(viewportRow) {
-      return viewportRow + term.buffer.active.viewportY;
-    }
-
-    // Select the word at (col, viewportRow), returns anchor info
-    function selectWordAt(col, viewportRow) {
-      const bRow = toBufferRow(viewportRow);
-      const line = term.buffer.active.getLine(bRow);
-      if (!line) return;
-
-      let start = col;
-      let end = col;
-      const isWordChar = (c) => /[\w\-./~]/.test(c);
-
-      const cell = line.getCell(col);
-      const ch = cell ? cell.getChars() : '';
-
-      if (ch && isWordChar(ch)) {
-        while (start > 0) {
-          const c = line.getCell(start - 1);
-          if (!c || !isWordChar(c.getChars())) break;
-          start--;
-        }
-        while (end < term.cols - 1) {
-          const c = line.getCell(end + 1);
-          if (!c || !isWordChar(c.getChars())) break;
-          end++;
-        }
-      }
-
-      term.select(start, bRow, end - start + 1);
-      selectionAnchor = { col: start, row: bRow, endCol: end, endRow: bRow };
-    }
-
-    // Extend selection from anchor to (col, viewportRow)
-    function extendSelectionTo(col, viewportRow) {
-      if (!selectionAnchor) return;
-      const bRow = toBufferRow(viewportRow);
-
-      let startCol, startRow, endCol, endRow;
-      if (bRow < selectionAnchor.row || (bRow === selectionAnchor.row && col < selectionAnchor.col)) {
-        startCol = col;
-        startRow = bRow;
-        endCol = selectionAnchor.endCol;
-        endRow = selectionAnchor.endRow;
-      } else {
-        startCol = selectionAnchor.col;
-        startRow = selectionAnchor.row;
-        endCol = col;
-        endRow = bRow;
-      }
-
-      const length = (endRow - startRow) * term.cols + (endCol - startCol + 1);
-      term.select(startCol, startRow, Math.max(1, length));
-    }
-
-    // Copy current selection to clipboard
-    function copySelection() {
-      const text = term.getSelection();
-      if (text) {
-        navigator.clipboard.writeText(text).catch(() => {});
-        showCopiedToast();
-      }
-    }
-
-    function showCopiedToast() {
-      let toast = document.getElementById('copy-toast');
-      if (!toast) {
-        toast = document.createElement('div');
-        toast.id = 'copy-toast';
-        toast.className = 'copy-toast';
-        toast.textContent = 'Copied';
-        document.body.appendChild(toast);
-      }
-      toast.classList.add('visible');
-      setTimeout(() => toast.classList.remove('visible'), 1000);
-    }
-
     // Tap-to-move: send arrow keys to reach target column on cursor's row
     function moveCursorTo(col, viewportRow) {
       if (term.buffer.active.viewportY !== term.buffer.active.baseY) return;
@@ -254,13 +173,6 @@ export function createTerminal(container, { session, fontSize = 14, onDataTransf
       sendKeys(arrow.repeat(Math.abs(delta)));
     }
 
-    function clearLongPress() {
-      if (longPressTimer) {
-        clearTimeout(longPressTimer);
-        longPressTimer = null;
-      }
-    }
-
     const attachGestures = () => {
       const screen = container.querySelector('.xterm-screen');
       if (!screen) return;
@@ -271,7 +183,6 @@ export function createTerminal(container, { session, fontSize = 14, onDataTransf
           pinchStartFontSize = term.options.fontSize;
           touchStartY = null;
           gestureDirection = null;
-          clearLongPress();
           e.preventDefault();
           return;
         }
@@ -281,22 +192,6 @@ export function createTerminal(container, { session, fontSize = 14, onDataTransf
           touchStartTime = Date.now();
           scrollAccumulator = 0;
           gestureDirection = null;
-          selectionAnchor = null;
-          term.clearSelection();
-
-          // Long-press timer for text selection
-          clearLongPress();
-          const sx = e.touches[0].clientX;
-          const sy = e.touches[0].clientY;
-          longPressTimer = setTimeout(() => {
-            longPressTimer = null;
-            gestureDirection = 'select';
-            const cell = coordsToCell(sx, sy);
-            if (cell) {
-              selectWordAt(cell.col, cell.row);
-              if (navigator.vibrate) navigator.vibrate(30);
-            }
-          }, LONG_PRESS_MS);
         }
       }, { passive: false });
 
@@ -319,21 +214,6 @@ export function createTerminal(container, { session, fontSize = 14, onDataTransf
         const currentX = e.touches[0].clientX;
         const deltaY = touchStartY - currentY;
         const deltaX = currentX - touchStartX;
-
-        // Cancel long-press on significant movement
-        if (longPressTimer && (Math.abs(touchStartY - currentY) > TAP_MAX_PX || Math.abs(deltaX) > TAP_MAX_PX)) {
-          clearLongPress();
-        }
-
-        // --- Selection mode: extend selection on drag ---
-        if (gestureDirection === 'select') {
-          const cell = coordsToCell(currentX, currentY);
-          if (cell) {
-            extendSelectionTo(cell.col, cell.row);
-          }
-          e.preventDefault();
-          return;
-        }
 
         // Lock direction on first significant movement
         if (gestureDirection === null && (Math.abs(deltaY) > DIRECTION_LOCK_PX || Math.abs(deltaX) > DIRECTION_LOCK_PX)) {
@@ -382,24 +262,10 @@ export function createTerminal(container, { session, fontSize = 14, onDataTransf
       }, { passive: false });
 
       screen.addEventListener('touchend', (e) => {
-        clearLongPress();
-
         // --- Pinch end ---
         if (pinchStartDist !== null && e.touches.length < 2) {
           pinchStartDist = null;
           pinchStartFontSize = null;
-          return;
-        }
-
-        // --- Selection end: copy to clipboard ---
-        if (gestureDirection === 'select') {
-          copySelection();
-          selectionAnchor = null;
-          setTimeout(() => term.clearSelection(), 800);
-          touchStartY = null;
-          touchStartX = null;
-          touchStartTime = null;
-          gestureDirection = null;
           return;
         }
 
