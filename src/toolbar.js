@@ -23,20 +23,27 @@ export function getKeySequence(label) {
 }
 
 /**
- * Create and mount the toolbar DOM — JuiceSSH-style extra keys bar
- * with CTRL/ALT as sticky toggle modifiers.
+ * Two-row layout matching JuiceSSH / Termux extra-keys:
+ *   Row 1: ESC  /  -  HOME  ↑  END  PGUP  |  _  ~  A-  A+
+ *   Row 2: TAB  CTRL  ALT  ←  ↓  →  PGDN
  */
 export function createToolbar(container, { onKey, onIncrease, onDecrease }) {
   let ctrlActive = false;
   let altActive = false;
 
-  const toolbar = document.createElement('div');
-  toolbar.className = 'toolbar';
+  const wrapper = document.createElement('div');
+  wrapper.className = 'toolbar-wrapper';
 
-  function sep() {
+  const row1 = document.createElement('div');
+  row1.className = 'toolbar toolbar-row';
+
+  const row2 = document.createElement('div');
+  row2.className = 'toolbar toolbar-row';
+
+  function sep(row) {
     const s = document.createElement('span');
     s.className = 'toolbar-sep';
-    return s;
+    row.appendChild(s);
   }
 
   function makeButton(label, onClick, extraClass = '') {
@@ -54,58 +61,53 @@ export function createToolbar(container, { onKey, onIncrease, onDecrease }) {
     return btn;
   }
 
-  // ESC
-  toolbar.appendChild(makeButton('ESC', () => onKey(KEYS['ESC']), 'toolbar-btn-wide'));
+  function keyBtn(row, label, extraClass) {
+    row.appendChild(makeButton(label, () => onKey(KEYS[label]), extraClass || ''));
+  }
 
-  toolbar.appendChild(sep());
+  // --- Row 1: ESC  /  -  HOME  ↑  END  PGUP  |  _  ~  A-  A+ ---
+  row1.appendChild(makeButton('ESC', () => onKey(KEYS['ESC']), 'toolbar-btn-wide'));
+  keyBtn(row1, '/');
+  keyBtn(row1, '-');
+  sep(row1);
+  keyBtn(row1, 'HOME', 'toolbar-btn-wide');
+  keyBtn(row1, '↑', 'toolbar-btn-arrow');
+  keyBtn(row1, 'END', 'toolbar-btn-wide');
+  keyBtn(row1, 'PGUP', 'toolbar-btn-wide');
+  sep(row1);
+  keyBtn(row1, '|');
+  keyBtn(row1, '_');
+  keyBtn(row1, '~');
+  sep(row1);
+  row1.appendChild(makeButton('A-', onDecrease, 'toolbar-font'));
+  row1.appendChild(makeButton('A+', onIncrease, 'toolbar-font'));
 
-  // CTRL toggle
+  // --- Row 2: TAB  CTRL  ALT  ←  ↓  →  PGDN ---
+  row2.appendChild(makeButton('TAB', () => onKey(KEYS['TAB']), 'toolbar-btn-wide'));
+  sep(row2);
+
   const ctrlBtn = makeButton('CTRL', () => {
     ctrlActive = !ctrlActive;
     ctrlBtn.classList.toggle('active', ctrlActive);
   }, 'toolbar-mod');
-  toolbar.appendChild(ctrlBtn);
+  row2.appendChild(ctrlBtn);
 
-  // ALT toggle
   const altBtn = makeButton('ALT', () => {
     altActive = !altActive;
     altBtn.classList.toggle('active', altActive);
   }, 'toolbar-mod');
-  toolbar.appendChild(altBtn);
+  row2.appendChild(altBtn);
 
-  toolbar.appendChild(sep());
+  sep(row2);
+  keyBtn(row2, '←', 'toolbar-btn-arrow');
+  keyBtn(row2, '↓', 'toolbar-btn-arrow');
+  keyBtn(row2, '→', 'toolbar-btn-arrow');
+  sep(row2);
+  keyBtn(row2, 'PGDN', 'toolbar-btn-wide');
 
-  // TAB
-  toolbar.appendChild(makeButton('TAB', () => onKey(KEYS['TAB']), 'toolbar-btn-wide'));
-
-  toolbar.appendChild(sep());
-
-  // Special characters
-  for (const ch of ['-', '/', '|', '_', '~']) {
-    toolbar.appendChild(makeButton(ch, () => onKey(ch)));
-  }
-
-  toolbar.appendChild(sep());
-
-  // Arrows
-  for (const key of ['←', '↑', '↓', '→']) {
-    toolbar.appendChild(makeButton(key, () => onKey(KEYS[key]), 'toolbar-btn-arrow'));
-  }
-
-  toolbar.appendChild(sep());
-
-  // Page/position navigation
-  for (const key of ['PGUP', 'PGDN', 'HOME', 'END']) {
-    toolbar.appendChild(makeButton(key, () => onKey(KEYS[key]), 'toolbar-btn-wide'));
-  }
-
-  toolbar.appendChild(sep());
-
-  // Font size
-  toolbar.appendChild(makeButton('A-', onDecrease, 'toolbar-font'));
-  toolbar.appendChild(makeButton('A+', onIncrease, 'toolbar-font'));
-
-  container.appendChild(toolbar);
+  wrapper.appendChild(row1);
+  wrapper.appendChild(row2);
+  container.appendChild(wrapper);
 
   function getModifiers() {
     return { ctrl: ctrlActive, alt: altActive };
@@ -118,5 +120,5 @@ export function createToolbar(container, { onKey, onIncrease, onDecrease }) {
     altBtn.classList.remove('active');
   }
 
-  return { toolbar, getModifiers, clearModifiers };
+  return { toolbar: wrapper, getModifiers, clearModifiers };
 }

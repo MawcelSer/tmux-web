@@ -190,10 +190,15 @@ body {
   border-top: 1px solid #21262d;
 }
 
-.toolbar {
+.toolbar-wrapper {
+  display: flex;
+  flex-direction: column;
+}
+
+.toolbar-row {
   display: flex;
   gap: 3px;
-  padding: 3px 4px;
+  padding: 2px 4px;
   overflow-x: auto;
   overflow-y: hidden;
   scrollbar-width: none;
@@ -202,7 +207,11 @@ body {
   -webkit-overflow-scrolling: touch;
 }
 
-.toolbar::-webkit-scrollbar {
+.toolbar-row:first-child {
+  border-bottom: 1px solid #21262d;
+}
+
+.toolbar-row::-webkit-scrollbar {
   display: none;
 }
 
@@ -296,8 +305,8 @@ body {
     min-height: 28px;
   }
 
-  .toolbar {
-    padding: 2px 3px;
+  .toolbar-row {
+    padding: 1px 3px;
     gap: 2px;
   }
 
