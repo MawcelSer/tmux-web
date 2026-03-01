@@ -46,11 +46,12 @@ export function createTerminal(container, { session, fontSize = 14, onDataTransf
   term.open(container);
 
   // Force mobile keyboard to lowercase mode.
-  // SwiftKey and some Android keyboards ignore autocapitalize on <textarea>
-  // but respect it on ancestor elements. The body and container attributes
-  // are set in index.html. Do NOT modify xterm's internal textarea — adding
-  // attributes like autocomplete="off" disrupts SwiftKey's composition
-  // handling and causes character doubling.
+  // Body/container autocapitalize is set in index.html for SwiftKey.
+  // Override xterm's "off" → "none" (spec value) on the textarea itself.
+  const helperTextarea = container.querySelector('.xterm-helper-textarea');
+  if (helperTextarea) {
+    helperTextarea.setAttribute('autocapitalize', 'none');
+  }
 
   requestAnimationFrame(() => {
     fitAddon.fit();
@@ -122,10 +123,22 @@ export function createTerminal(container, { session, fontSize = 14, onDataTransf
     }
   });
 
-  // Send data with optional modifier transform
+  // Send data with optional modifier transform.
+  // SwiftKey fires both compositionend and input events for the same
+  // character (especially punctuation), causing xterm's onData to fire
+  // twice within microseconds. Deduplicate single-char sends within 20ms.
+  let lastSentChar = '';
+  let lastSentTime = 0;
+
   term.onData((data) => {
     const transformed = onDataTransform ? onDataTransform(data) : data;
     if (ws && ws.readyState === WebSocket.OPEN) {
+      const now = performance.now();
+      if (transformed.length === 1 && transformed === lastSentChar && now - lastSentTime < 20) {
+        return;
+      }
+      lastSentChar = transformed.length === 1 ? transformed : '';
+      lastSentTime = now;
       ws.send(transformed);
     }
   });
