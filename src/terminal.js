@@ -45,13 +45,18 @@ export function createTerminal(container, { session, fontSize = 14, onDataTransf
 
   term.open(container);
 
-  // Disable mobile keyboard autocapitalize/autocorrect for terminal input
+  // Force mobile keyboard to lowercase mode.
+  // xterm.js sets autocapitalize="off" internally, but "off" is a non-standard
+  // alias that some mobile browsers (Android/Gboard) ignore. The spec value
+  // is "none". We also add inputmode="text" which hints some keyboards to
+  // skip auto-capitalization entirely.
   const helperTextarea = container.querySelector('.xterm-helper-textarea');
   if (helperTextarea) {
-    helperTextarea.setAttribute('autocapitalize', 'off');
+    helperTextarea.setAttribute('autocapitalize', 'none');
     helperTextarea.setAttribute('autocorrect', 'off');
     helperTextarea.setAttribute('autocomplete', 'off');
     helperTextarea.setAttribute('spellcheck', 'false');
+    helperTextarea.setAttribute('inputmode', 'text');
   }
 
   requestAnimationFrame(() => {
