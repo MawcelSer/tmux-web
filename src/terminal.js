@@ -116,9 +116,26 @@ export function createTerminal(container, { session, fontSize = 14, onDataTransf
     }
   });
 
-  // Handle resize
+  // Handle resize — debounced to avoid excessive redraws that scroll to bottom
+  let fitTimer = null;
+  let lastCols = term.cols;
+  let lastRows = term.rows;
+
+  function debouncedFit() {
+    if (fitTimer) clearTimeout(fitTimer);
+    fitTimer = setTimeout(() => {
+      fitTimer = null;
+      const proposedDims = fitAddon.proposeDimensions();
+      if (proposedDims && (proposedDims.cols !== lastCols || proposedDims.rows !== lastRows)) {
+        lastCols = proposedDims.cols;
+        lastRows = proposedDims.rows;
+        fitAddon.fit();
+      }
+    }, 150);
+  }
+
   const resizeObserver = new ResizeObserver(() => {
-    fitAddon.fit();
+    debouncedFit();
   });
   resizeObserver.observe(container);
 
@@ -136,8 +153,7 @@ export function createTerminal(container, { session, fontSize = 14, onDataTransf
     let touchStartTime = null;
     let scrollAccumulator = 0;
     let gestureDirection = null; // null | 'scroll' | 'swipe'
-    const PX_PER_LINE = 24;
-    const MAX_LINES_PER_FRAME = 5;
+    const PX_PER_LINE = 18;
     const SWIPE_THRESHOLD = 0.4;
     const DIRECTION_LOCK_PX = 10;
     const TAP_MAX_MS = 300;
@@ -250,12 +266,9 @@ export function createTerminal(container, { session, fontSize = 14, onDataTransf
           const lines = Math.trunc(scrollAccumulator / PX_PER_LINE);
           if (lines !== 0) {
             scrollAccumulator -= lines * PX_PER_LINE;
-            const button = lines > 0 ? 65 : 64;
-            const count = Math.min(Math.abs(lines), MAX_LINES_PER_FRAME);
-            const seq = `\x1b[<${button};1;1M`;
-            for (let i = 0; i < count; i++) {
-              sendKeys(seq);
-            }
+            // Local scroll: negative = up (older), positive = down (newer)
+            // delta > 0 (finger up) → lines > 0 → scroll down (newer) — natural scrolling
+            term.scrollLines(lines);
           }
           e.preventDefault();
         }
@@ -321,7 +334,13 @@ export function createTerminal(container, { session, fontSize = 14, onDataTransf
 
   function setFontSize(size) {
     term.options.fontSize = size;
+    lastCols = 0; // force re-fit
+    lastRows = 0;
     fitAddon.fit();
+  }
+
+  function fit() {
+    debouncedFit();
   }
 
   function sendKeys(seq) {
@@ -358,5 +377,5 @@ export function createTerminal(container, { session, fontSize = 14, onDataTransf
     term.dispose();
   }
 
-  return { term, fitAddon, searchAddon, setFontSize, sendKeys, switchWindow, newWindow, dispose };
+  return { term, fit, searchAddon, setFontSize, sendKeys, switchWindow, newWindow, dispose };
 }

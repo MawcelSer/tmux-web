@@ -64,12 +64,13 @@ export function createToolbar(container, { onKey, onIncrease, onDecrease }) {
 
     btn.addEventListener('touchstart', (e) => {
       e.preventDefault();
+      if (navigator.vibrate) navigator.vibrate(15);
       onClick();
       if (repeat) {
         repeatTimer = setTimeout(() => {
           repeatInterval = setInterval(() => {
             onClick();
-            if (navigator.vibrate) navigator.vibrate(10);
+            navigator.vibrate?.(15);
           }, 80);
         }, 400);
       }

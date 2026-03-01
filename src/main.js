@@ -110,7 +110,7 @@ if (window.visualViewport) {
     const vv = window.visualViewport;
     document.body.style.height = `${vv.height}px`;
     document.body.style.transform = `translateY(${vv.offsetTop}px)`;
-    terminal.fitAddon.fit();
+    terminal.fit();
   };
   window.visualViewport.addEventListener('resize', onViewportResize);
   window.visualViewport.addEventListener('scroll', onViewportResize);
