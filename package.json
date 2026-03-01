@@ -5,12 +5,17 @@
   "type": "module",
   "scripts": {
     "dev": "node server/index.js",
+    "start": "pm2 start server/index.js --name tmuxweb",
+    "stop": "pm2 stop tmuxweb",
+    "restart": "pm2 restart tmuxweb",
+    "logs": "pm2 logs tmuxweb",
     "build": "vite build",
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest"
   },
   "dependencies": {
+    "pm2": "^6.0.14",
     "ws": "^8.18.0"
   },
   "devDependencies": {
