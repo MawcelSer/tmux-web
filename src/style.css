@@ -170,6 +170,27 @@ body {
   opacity: 0.9;
 }
 
+/* === Copy Toast === */
+.copy-toast {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background: rgba(31, 111, 235, 0.9);
+  color: #fff;
+  padding: 6px 16px;
+  border-radius: 6px;
+  font-size: 13px;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+  pointer-events: none;
+  z-index: 200;
+}
+
+.copy-toast.visible {
+  opacity: 1;
+}
+
 /* === Terminal === */
 #terminal-container {
   flex: 1;

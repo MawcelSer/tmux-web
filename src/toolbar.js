@@ -17,6 +17,9 @@ export const KEYS = {
   'END': '\x1b[F',
 };
 
+/** Keys that auto-repeat when held. */
+const REPEAT_KEYS = new Set(['←', '↑', '↓', '→', 'PGUP', 'PGDN']);
+
 /** Get the escape sequence for a key label. */
 export function getKeySequence(label) {
   return KEYS[label];
@@ -46,14 +49,30 @@ export function createToolbar(container, { onKey, onIncrease, onDecrease }) {
     row.appendChild(s);
   }
 
-  function makeButton(label, onClick, extraClass = '') {
+  function makeButton(label, onClick, extraClass = '', repeat = false) {
     const btn = document.createElement('button');
     btn.className = `toolbar-btn ${extraClass}`.trim();
     btn.textContent = label;
+
+    let repeatTimer = null;
+    let repeatInterval = null;
+
+    function stopRepeat() {
+      if (repeatTimer) { clearTimeout(repeatTimer); repeatTimer = null; }
+      if (repeatInterval) { clearInterval(repeatInterval); repeatInterval = null; }
+    }
+
     btn.addEventListener('touchstart', (e) => {
       e.preventDefault();
       onClick();
+      if (repeat) {
+        repeatTimer = setTimeout(() => {
+          repeatInterval = setInterval(onClick, 80);
+        }, 400);
+      }
     });
+    btn.addEventListener('touchend', stopRepeat);
+    btn.addEventListener('touchcancel', stopRepeat);
     btn.addEventListener('click', (e) => {
       e.preventDefault();
       onClick();
@@ -62,7 +81,8 @@ export function createToolbar(container, { onKey, onIncrease, onDecrease }) {
   }
 
   function keyBtn(row, label, extraClass) {
-    row.appendChild(makeButton(label, () => onKey(KEYS[label]), extraClass || ''));
+    const repeat = REPEAT_KEYS.has(label);
+    row.appendChild(makeButton(label, () => onKey(KEYS[label]), extraClass || '', repeat));
   }
 
   // --- Row 1: ESC  /  -  HOME  ↑  END  PGUP  |  _  ~  A-  A+ ---
