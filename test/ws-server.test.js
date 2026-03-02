@@ -11,11 +11,6 @@ async function startServer(opts = {}) {
   return `http://localhost:${addr.port}`;
 }
 
-async function fetch_(url) {
-  const res = await fetch(url);
-  return { status: res.status, body: await res.text(), json: res.headers.get('content-type')?.includes('json') ? JSON.parse(await res.clone().text()) : null };
-}
-
 afterEach(async () => {
   if (server) {
     await server.close();

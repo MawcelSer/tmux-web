@@ -43,6 +43,7 @@ export function createPty({ session = '', cols = 80, rows = 24, spawnFn = defaul
   });
 
   child.on('error', (err) => {
+    console.error('PTY bridge spawn error:', err.message);
     for (const cb of exitCallbacks) cb(1);
   });
 

@@ -5,9 +5,7 @@ import { execFile as defaultExecFile } from 'node:child_process';
  * Each line: "name: N windows (created <date>) [(attached)]"
  */
 export function parseSessions(stdout) {
-  if (!stdout || stdout.includes('no server running') || stdout.includes('error')) {
-    if (!stdout || !stdout.includes(' windows (created ')) return [];
-  }
+  if (!stdout || !stdout.includes(' windows (created ')) return [];
   const sessions = [];
   for (const line of stdout.trim().split('\n')) {
     if (!line.trim()) continue;

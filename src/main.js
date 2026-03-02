@@ -38,13 +38,19 @@ toolbar = createToolbar(document.getElementById('toolbar-container'), {
 let sessionList = [];
 let currentSessionIndex = -1;
 
+function activateSession(name) {
+  terminal.switchWindow(name, null);
+  switcher.setCurrentSession(name);
+  currentSessionIndex = sessionList.indexOf(name);
+}
+
 async function refreshSessionList() {
   try {
     const res = await fetch('/api/sessions');
     const data = await res.json();
     sessionList = data.sessions.map((s) => s.name);
-    if (switcher._currentSession) {
-      currentSessionIndex = sessionList.indexOf(switcher._currentSession);
+    if (switcher.getCurrentSession()) {
+      currentSessionIndex = sessionList.indexOf(switcher.getCurrentSession());
     } else if (data.sessions.length > 0) {
       // No session selected yet — pick attached session or first available
       const attached = data.sessions.find((s) => s.attached);
@@ -52,7 +58,9 @@ async function refreshSessionList() {
       switcher.setCurrentSession(target);
       currentSessionIndex = sessionList.indexOf(target);
     }
-  } catch { /* ignore */ }
+  } catch (err) {
+    console.error('refreshSessionList failed:', err);
+  }
 }
 
 const switcher = createSessionSwitcher({
@@ -64,36 +72,31 @@ const switcher = createSessionSwitcher({
   windowsBtn: document.getElementById('btn-windows'),
   currentLabel: document.getElementById('current-session'),
   onSwitch: (session, windowIndex) => {
-    terminal.switchWindow(session, windowIndex);
-    switcher.setCurrentSession(session);
-    currentSessionIndex = sessionList.indexOf(session);
+    if (windowIndex != null) {
+      terminal.switchWindow(session, windowIndex);
+      switcher.setCurrentSession(session);
+      currentSessionIndex = sessionList.indexOf(session);
+    } else {
+      activateSession(session);
+    }
   },
   onNewWindow: (session) => {
     terminal.newWindow(session);
   },
   onNewSession: (name) => {
     terminal.newSession(name);
-    setTimeout(async () => {
-      await refreshSessionList();
-      if (sessionList.includes(name)) {
-        terminal.switchWindow(name, null);
-        switcher.setCurrentSession(name);
-        currentSessionIndex = sessionList.indexOf(name);
-      }
-    }, 300);
+    pollUntil(
+      () => sessionList.includes(name),
+      () => activateSession(name),
+    );
   },
   onKillSession: (name, isCurrentSession) => {
     terminal.killSession(name);
     if (isCurrentSession) {
-      setTimeout(async () => {
-        await refreshSessionList();
-        if (sessionList.length > 0) {
-          const target = sessionList[0];
-          terminal.switchWindow(target, null);
-          switcher.setCurrentSession(target);
-          currentSessionIndex = 0;
-        }
-      }, 300);
+      pollUntil(
+        () => !sessionList.includes(name),
+        () => { if (sessionList.length > 0) activateSession(sessionList[0]); },
+      );
     }
   },
   onKillWindow: (session, windowIndex) => {
@@ -127,10 +130,7 @@ termContainer.addEventListener('swipe-session', async (e) => {
     idx = (idx - 1 + sessionList.length) % sessionList.length;
   }
 
-  const target = sessionList[idx];
-  terminal.switchWindow(target, null);
-  switcher.setCurrentSession(target);
-  currentSessionIndex = idx;
+  activateSession(sessionList[idx]);
 });
 
 // --- Pinch zoom → font size ---
@@ -148,6 +148,18 @@ if (window.visualViewport) {
   };
   window.visualViewport.addEventListener('resize', onViewportResize);
   window.visualViewport.addEventListener('scroll', onViewportResize);
+}
+
+/** Retry refreshSessionList until condition is met, then run callback. */
+async function pollUntil(condition, onSuccess, retries = 5, delay = 200) {
+  for (let i = 0; i < retries; i++) {
+    await new Promise((r) => setTimeout(r, delay));
+    await refreshSessionList();
+    if (condition()) {
+      onSuccess();
+      return;
+    }
+  }
 }
 
 /** Apply CTRL/ALT modifiers to terminal input. */

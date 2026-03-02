@@ -148,7 +148,7 @@ export function createSessionSwitcher({ panel, list, title, closeBtn, sessionsBt
         const li = document.createElement('li');
 
         const contentSpan = document.createElement('span');
-        contentSpan.innerHTML = `${esc(sess.name)} <small>(${sess.windows} win)</small>`;
+        contentSpan.textContent = `${sess.name} (${sess.windows} win)`;
 
         const badgeSpan = document.createElement('span');
         badgeSpan.className = `badge ${sess.attached ? 'attached' : ''}`;
@@ -180,7 +180,8 @@ export function createSessionSwitcher({ panel, list, title, closeBtn, sessionsBt
         attachLongPress(li, badgeSpan, killBtn);
         list.appendChild(li);
       }
-    } catch {
+    } catch (err) {
+      console.error('loadSessions failed:', err);
       list.innerHTML = '<li>Error loading sessions</li>';
     }
   }
@@ -212,7 +213,7 @@ export function createSessionSwitcher({ panel, list, title, closeBtn, sessionsBt
         const li = document.createElement('li');
 
         const contentSpan = document.createElement('span');
-        contentSpan.innerHTML = `${win.index}: ${esc(win.name)}`;
+        contentSpan.textContent = `${win.index}: ${win.name}`;
 
         const badgeSpan = document.createElement('span');
         badgeSpan.className = `badge ${win.active ? 'attached' : ''}`;
@@ -241,7 +242,8 @@ export function createSessionSwitcher({ panel, list, title, closeBtn, sessionsBt
         attachLongPress(li, badgeSpan, killBtn);
         list.appendChild(li);
       }
-    } catch {
+    } catch (err) {
+      console.error('loadWindows failed:', err);
       list.innerHTML = '<li>Error loading windows</li>';
     }
   }
@@ -259,12 +261,6 @@ export function createSessionSwitcher({ panel, list, title, closeBtn, sessionsBt
     show,
     loadSessions,
     loadWindows,
-    get _currentSession() { return currentSession; },
+    getCurrentSession() { return currentSession; },
   };
-}
-
-function esc(str) {
-  const el = document.createElement('span');
-  el.textContent = str;
-  return el.innerHTML;
 }

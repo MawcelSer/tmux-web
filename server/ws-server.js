@@ -24,8 +24,20 @@ const MIME_TYPES = {
   '.ttf': 'font/ttf',
 };
 
+const VALID_NAME_RE = /^[\w\-. ]+$/;
+const MAX_SEND_BUF_BYTES = 1024 * 1024; // 1 MB cap to prevent OOM
+const CLOSE_TIMEOUT_MS = 5000;
+
+function isValidName(name) {
+  return typeof name === 'string' && name.length > 0 && VALID_NAME_RE.test(name);
+}
+
+function isValidWindowIndex(idx) {
+  return Number.isInteger(idx) && idx >= 0;
+}
+
 function sendJson(res, status, data) {
-  res.writeHead(status, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+  res.writeHead(status, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify(data));
 }
 
@@ -43,8 +55,12 @@ export function createServer({
     const url = new URL(req.url, `http://${req.headers.host}`);
     const pathname = url.pathname;
 
-    // REST API
+    // REST API — GET only
     if (pathname === '/api/sessions') {
+      if (req.method !== 'GET') {
+        sendJson(res, 405, { error: 'Method Not Allowed' });
+        return;
+      }
       const sessions = await listSessionsFn();
       sendJson(res, 200, { sessions });
       return;
@@ -52,12 +68,16 @@ export function createServer({
 
     const windowsMatch = pathname.match(/^\/api\/windows\/(.+)$/);
     if (windowsMatch) {
+      if (req.method !== 'GET') {
+        sendJson(res, 405, { error: 'Method Not Allowed' });
+        return;
+      }
       const session = decodeURIComponent(windowsMatch[1]);
       try {
         const windows = await listWindowsFn(session);
         sendJson(res, 200, { windows });
-      } catch (err) {
-        sendJson(res, 404, { error: err.message });
+      } catch {
+        sendJson(res, 404, { error: 'Session not found' });
       }
       return;
     }
@@ -106,21 +126,30 @@ export function createServer({
 
     if (session) activeSessions.set(session, { ws, pty });
 
-    // Coalesce PTY output using setImmediate: batches data from the same
-    // event loop tick into one WebSocket send. ~0ms latency for isolated
-    // events (keystroke echo), effective batching during bursts (scrolling).
+    // Coalesce PTY output using setImmediate with a byte cap to prevent OOM.
+    // Batches data from the same event loop tick into one WebSocket send.
     let sendBuf = [];
+    let sendBufBytes = 0;
     let sendScheduled = false;
+
     function flushSendBuf() {
       sendScheduled = false;
       if (sendBuf.length && ws.readyState === 1) {
         ws.send(Buffer.concat(sendBuf));
         sendBuf = [];
+        sendBufBytes = 0;
       }
     }
+
     pty.onData((data) => {
       if (ws.readyState !== 1) return;
       sendBuf.push(data);
+      sendBufBytes += data.length;
+      if (sendBufBytes > MAX_SEND_BUF_BYTES) {
+        sendBuf = [];
+        sendBufBytes = 0;
+        return;
+      }
       if (!sendScheduled) {
         sendScheduled = true;
         setImmediate(flushSendBuf);
@@ -139,11 +168,17 @@ export function createServer({
       if (str.charCodeAt(0) === 123) { // '{'
         try {
           const parsed = JSON.parse(str);
-          if (parsed.type === 'resize' && parsed.cols && parsed.rows) {
-            pty.resize(parsed.cols, parsed.rows);
+          if (parsed.type === 'resize') {
+            const { cols, rows } = parsed;
+            if (Number.isInteger(cols) && Number.isInteger(rows) &&
+                cols > 0 && cols <= 500 && rows > 0 && rows <= 200) {
+              pty.resize(cols, rows);
+            }
             return;
           }
           if (parsed.type === 'switch') {
+            if (!isValidName(parsed.session)) return;
+            if (parsed.window != null && !isValidWindowIndex(parsed.window)) return;
             const tty = pty.getTty();
             const target = parsed.window != null
               ? `${parsed.session}:${parsed.window}`
@@ -154,27 +189,24 @@ export function createServer({
             return;
           }
           if (parsed.type === 'new-window') {
+            if (!isValidName(parsed.session)) return;
             execFile('tmux', ['new-window', '-t', parsed.session], () => {});
             return;
           }
           if (parsed.type === 'new-session') {
-            const name = parsed.name;
-            if (!name || !/^[\w\-. ]+$/.test(name)) return;
-            execFile('tmux', ['new-session', '-d', '-s', name], () => {});
+            if (!isValidName(parsed.name)) return;
+            execFile('tmux', ['new-session', '-d', '-s', parsed.name], () => {});
             return;
           }
           if (parsed.type === 'kill-session') {
-            const name = parsed.name;
-            if (!name || !/^[\w\-. ]+$/.test(name)) return;
-            execFile('tmux', ['kill-session', '-t', name], () => {});
+            if (!isValidName(parsed.name)) return;
+            execFile('tmux', ['kill-session', '-t', parsed.name], () => {});
             return;
           }
           if (parsed.type === 'kill-window') {
-            const sessionName = parsed.session;
-            const winIndex = parsed.window;
-            if (!sessionName || !/^[\w\-. ]+$/.test(sessionName)) return;
-            if (!Number.isInteger(winIndex) || winIndex < 0) return;
-            execFile('tmux', ['kill-window', '-t', `${sessionName}:${winIndex}`], () => {});
+            if (!isValidName(parsed.session)) return;
+            if (!isValidWindowIndex(parsed.window)) return;
+            execFile('tmux', ['kill-window', '-t', `${parsed.session}:${parsed.window}`], () => {});
             return;
           }
           // Any JSON with a 'type' field is a control message — never forward to terminal
@@ -186,10 +218,13 @@ export function createServer({
       pty.write(str);
     });
 
-    ws.on('error', () => {});
+    ws.on('error', (err) => {
+      console.error('WebSocket error for session:', session, err.message);
+    });
 
     ws.on('close', () => {
       sendBuf = [];
+      sendBufBytes = 0;
       pty.kill();
       if (session && activeSessions.get(session)?.ws === ws) {
         activeSessions.delete(session);
@@ -204,9 +239,13 @@ export function createServer({
     wss,
     close() {
       return new Promise((resolve) => {
+        const timeout = setTimeout(resolve, CLOSE_TIMEOUT_MS);
         wss.clients.forEach((ws) => ws.terminate());
         wss.close(() => {
-          httpServer.close(resolve);
+          httpServer.close(() => {
+            clearTimeout(timeout);
+            resolve();
+          });
         });
       });
     },

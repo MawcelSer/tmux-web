@@ -3,33 +3,275 @@ import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import { SearchAddon } from '@xterm/addon-search';
 
+const THEME = {
+  background: '#101b2c',
+  foreground: '#c9d1d9',
+  cursor: '#58a6ff',
+  cursorAccent: '#101b2c',
+  selectionBackground: 'rgba(31, 111, 235, 0.3)',
+  black: '#101b2c',
+  red: '#f85149',
+  green: '#3fb950',
+  yellow: '#d29922',
+  blue: '#58a6ff',
+  magenta: '#bc8cff',
+  cyan: '#39d353',
+  white: '#c9d1d9',
+  brightBlack: '#484f58',
+  brightRed: '#ff7b72',
+  brightGreen: '#56d364',
+  brightYellow: '#e3b341',
+  brightBlue: '#79c0ff',
+  brightMagenta: '#d2a8ff',
+  brightCyan: '#56d364',
+  brightWhite: '#f0f6fc',
+};
+
+/**
+ * Patch xterm's _handleAnyTextareaChanges to fix SwiftKey double-fire.
+ * Tested with @xterm/xterm@5.5.0 — re-verify on every xterm upgrade.
+ * See: https://github.com/xtermjs/xterm.js/issues/3600
+ *
+ * SwiftKey does delete-then-insert for punctuation after auto-space.
+ * xterm's _handleAnyTextareaChanges uses newValue.replace(oldValue, '')
+ * which fails when delete changes the sequence — replace() returns the
+ * ENTIRE textarea as "new" data. Fix: debounce the burst into one diff
+ * and use proper prefix/suffix comparison instead of String.replace().
+ */
+function patchSwiftKeyComposition(term) {
+  const core = term._core;
+  const compHelper = core?._compositionHelper;
+
+  if (!compHelper ||
+      typeof compHelper._handleAnyTextareaChanges !== 'function' ||
+      !('_isComposing' in compHelper) ||
+      !('_coreService' in compHelper) ||
+      !('_textarea' in compHelper)) {
+    return;
+  }
+
+  let firstOldValue = null;
+  let pendingTimer = null;
+
+  compHelper._handleAnyTextareaChanges = function() {
+    if (firstOldValue === null) {
+      firstOldValue = this._textarea.value;
+    }
+    clearTimeout(pendingTimer);
+    pendingTimer = setTimeout(() => {
+      pendingTimer = null;
+      const oldValue = firstOldValue;
+      firstOldValue = null;
+
+      if (this._isComposing) return;
+      const newValue = this._textarea.value;
+      if (newValue === oldValue) return;
+
+      let prefixLen = 0;
+      const minLen = Math.min(oldValue.length, newValue.length);
+      while (prefixLen < minLen && oldValue[prefixLen] === newValue[prefixLen]) {
+        prefixLen++;
+      }
+
+      let suffixLen = 0;
+      while (suffixLen < (minLen - prefixLen) &&
+             oldValue[oldValue.length - 1 - suffixLen] === newValue[newValue.length - 1 - suffixLen]) {
+        suffixLen++;
+      }
+
+      const deleted = oldValue.substring(prefixLen, oldValue.length - suffixLen);
+      const added = newValue.substring(prefixLen, newValue.length - suffixLen);
+
+      for (let k = 0; k < deleted.length; k++) {
+        this._coreService.triggerDataEvent('\x7f', true);
+      }
+      if (added.length > 0) {
+        this._dataAlreadySent = added;
+        this._coreService.triggerDataEvent(added, true);
+      }
+    }, 15);
+  };
+}
+
+function getTouchDistance(touches) {
+  const dx = touches[0].clientX - touches[1].clientX;
+  const dy = touches[0].clientY - touches[1].clientY;
+  return Math.sqrt(dx * dx + dy * dy);
+}
+
+/**
+ * Set up touch gestures: scroll, swipe, pinch.
+ * Taps flow through to browser (click synthesis).
+ */
+function setupTouchGestures(container, term, sendKeysFn) {
+  let touchStartY = null;
+  let touchStartX = null;
+  let scrollAccumulator = 0;
+  let lastScrollSend = 0;
+  let gestureDirection = null; // null | 'scroll' | 'swipe'
+  const PX_PER_LINE = 20;
+  const SCROLL_THROTTLE_MS = 60;
+  const SWIPE_THRESHOLD = 0.4;
+  const DIRECTION_LOCK_PX = 10;
+
+  let scrollDrainTimer = null;
+  let pinchStartDist = null;
+  let pinchStartFontSize = null;
+
+  const swipeLeftEl = document.getElementById('swipe-left');
+  const swipeRightEl = document.getElementById('swipe-right');
+
+  function flushScroll() {
+    const lines = Math.trunc(scrollAccumulator / PX_PER_LINE);
+    if (lines === 0) {
+      stopScrollDrain();
+      return;
+    }
+    const sign = lines > 0 ? 1 : -1;
+    const capped = Math.min(Math.abs(lines), 5);
+    scrollAccumulator -= sign * capped * PX_PER_LINE;
+    const button = sign > 0 ? 65 : 64;
+    sendKeysFn(`\x1b[<${button};1;1M`.repeat(capped));
+    if (Math.abs(scrollAccumulator) >= PX_PER_LINE) {
+      startScrollDrain();
+    } else {
+      stopScrollDrain();
+    }
+  }
+
+  function startScrollDrain() {
+    if (!scrollDrainTimer) {
+      scrollDrainTimer = setInterval(flushScroll, SCROLL_THROTTLE_MS);
+    }
+  }
+
+  function stopScrollDrain() {
+    if (scrollDrainTimer) {
+      clearInterval(scrollDrainTimer);
+      scrollDrainTimer = null;
+    }
+  }
+
+  container.addEventListener('touchstart', (e) => {
+    if (e.touches.length === 2) {
+      pinchStartDist = getTouchDistance(e.touches);
+      pinchStartFontSize = term.options.fontSize;
+      touchStartY = null;
+      gestureDirection = null;
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
+    if (e.touches.length === 1) {
+      touchStartY = e.touches[0].clientY;
+      touchStartX = e.touches[0].clientX;
+      scrollAccumulator = 0;
+      stopScrollDrain();
+      gestureDirection = null;
+    }
+  }, { capture: true, passive: false });
+
+  container.addEventListener('touchmove', (e) => {
+    if (e.touches.length === 2 && pinchStartDist !== null) {
+      const dist = getTouchDistance(e.touches);
+      const scale = dist / pinchStartDist;
+      const newSize = Math.round(pinchStartFontSize * scale);
+      if (newSize !== term.options.fontSize && newSize >= 6 && newSize <= 32) {
+        container.dispatchEvent(new CustomEvent('pinch-zoom', { detail: { fontSize: newSize } }));
+      }
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
+
+    if (touchStartY === null || e.touches.length !== 1) return;
+
+    const currentY = e.touches[0].clientY;
+    const currentX = e.touches[0].clientX;
+    const deltaY = touchStartY - currentY;
+    const deltaX = currentX - touchStartX;
+
+    if (gestureDirection === null) {
+      if (Math.abs(deltaY) > DIRECTION_LOCK_PX || Math.abs(deltaX) > DIRECTION_LOCK_PX) {
+        gestureDirection = Math.abs(deltaX) > Math.abs(deltaY) * 1.5 ? 'swipe' : 'scroll';
+      } else {
+        return;
+      }
+    }
+
+    if (gestureDirection === 'swipe') {
+      if (swipeLeftEl && swipeRightEl) {
+        if (deltaX > DIRECTION_LOCK_PX) {
+          swipeRightEl.classList.add('visible');
+          swipeLeftEl.classList.remove('visible');
+        } else if (deltaX < -DIRECTION_LOCK_PX) {
+          swipeLeftEl.classList.add('visible');
+          swipeRightEl.classList.remove('visible');
+        } else {
+          swipeLeftEl.classList.remove('visible');
+          swipeRightEl.classList.remove('visible');
+        }
+      }
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
+
+    if (gestureDirection === 'scroll') {
+      const delta = touchStartY - currentY;
+      touchStartY = currentY;
+      if (Math.abs(delta) < 2) return;
+
+      scrollAccumulator += delta;
+      const now = Date.now();
+      if (now - lastScrollSend >= SCROLL_THROTTLE_MS) {
+        flushScroll();
+        lastScrollSend = now;
+      }
+      e.preventDefault();
+      e.stopPropagation();
+    }
+  }, { capture: true, passive: false });
+
+  container.addEventListener('touchend', (e) => {
+    if (pinchStartDist !== null && e.touches.length < 2) {
+      pinchStartDist = null;
+      pinchStartFontSize = null;
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
+
+    if (gestureDirection === 'swipe' && touchStartX !== null) {
+      const endX = e.changedTouches[0]?.clientX ?? touchStartX;
+      const deltaX = endX - touchStartX;
+      if (Math.abs(deltaX) > window.innerWidth * SWIPE_THRESHOLD) {
+        container.dispatchEvent(new CustomEvent('swipe-session', {
+          detail: { direction: deltaX > 0 ? 'next' : 'prev' },
+        }));
+      }
+    }
+
+    if (gestureDirection !== null) {
+      if (gestureDirection === 'scroll') flushScroll();
+      e.preventDefault();
+    }
+
+    if (swipeLeftEl) swipeLeftEl.classList.remove('visible');
+    if (swipeRightEl) swipeRightEl.classList.remove('visible');
+
+    touchStartY = null;
+    touchStartX = null;
+    scrollAccumulator = 0;
+    gestureDirection = null;
+  }, { capture: true, passive: false });
+}
+
 export function createTerminal(container, { session, fontSize = 14, onDataTransform }) {
   const term = new Terminal({
     fontSize,
     fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'Consolas', monospace",
-    theme: {
-      background: '#101b2c',
-      foreground: '#c9d1d9',
-      cursor: '#58a6ff',
-      cursorAccent: '#101b2c',
-      selectionBackground: 'rgba(31, 111, 235, 0.3)',
-      black: '#101b2c',
-      red: '#f85149',
-      green: '#3fb950',
-      yellow: '#d29922',
-      blue: '#58a6ff',
-      magenta: '#bc8cff',
-      cyan: '#39d353',
-      white: '#c9d1d9',
-      brightBlack: '#484f58',
-      brightRed: '#ff7b72',
-      brightGreen: '#56d364',
-      brightYellow: '#e3b341',
-      brightBlue: '#79c0ff',
-      brightMagenta: '#d2a8ff',
-      brightCyan: '#56d364',
-      brightWhite: '#f0f6fc',
-    },
+    theme: THEME,
     scrollback: 5000,
     cursorBlink: true,
     allowProposedApi: true,
@@ -45,17 +287,15 @@ export function createTerminal(container, { session, fontSize = 14, onDataTransf
 
   term.open(container);
 
-  // Force mobile keyboard to lowercase mode.
-  // Body/container autocapitalize is set in index.html for SwiftKey.
-  // Override xterm's "off" → "none" (spec value) on the textarea itself.
+  // Force mobile keyboard to lowercase mode
   const helperTextarea = container.querySelector('.xterm-helper-textarea');
   if (helperTextarea) {
     helperTextarea.setAttribute('autocapitalize', 'none');
   }
 
-  requestAnimationFrame(() => {
-    fitAddon.fit();
-  });
+  patchSwiftKeyComposition(term);
+
+  requestAnimationFrame(() => fitAddon.fit());
 
   // --- WebSocket with auto-reconnect ---
   let ws = null;
@@ -64,6 +304,12 @@ export function createTerminal(container, { session, fontSize = 14, onDataTransf
   let reconnectDelay = 1000;
   const MAX_RECONNECT_DELAY = 30000;
   let intentionalClose = false;
+
+  function wsSend(data) {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(data);
+    }
+  }
 
   function connect() {
     if (reconnectTimer) {
@@ -77,11 +323,7 @@ export function createTerminal(container, { session, fontSize = 14, onDataTransf
 
     ws.addEventListener('open', () => {
       reconnectDelay = 1000;
-      ws.send(JSON.stringify({
-        type: 'resize',
-        cols: term.cols,
-        rows: term.rows,
-      }));
+      wsSend(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
     });
 
     ws.addEventListener('message', (event) => {
@@ -115,40 +357,17 @@ export function createTerminal(container, { session, fontSize = 14, onDataTransf
 
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible' && (!ws || ws.readyState !== WebSocket.OPEN)) {
-      if (ws && ws.readyState !== WebSocket.CLOSED) {
-        ws.close();
-      }
+      if (ws && ws.readyState !== WebSocket.CLOSED) ws.close();
       reconnectDelay = 1000;
       connect();
     }
   });
 
-  // Send data with optional modifier transform.
-  // SwiftKey fires both compositionend and input events for the same
-  // data, causing xterm's onData to fire twice within microseconds.
-  // The duplicates can be interleaved (e.g. "word", "\r", "word", "\r")
-  // so a simple last-sent check fails. Track all sends within a 10ms
-  // rolling window and suppress any exact match (composition dupes fire
-  // in <5ms; key repeats are >=15ms apart, so 10ms is safe).
-  const recentSends = new Map();
-
   term.onData((data) => {
-    const transformed = onDataTransform ? onDataTransform(data) : data;
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      const now = performance.now();
-      for (const [key, time] of recentSends) {
-        if (now - time > 10) recentSends.delete(key);
-      }
-      if (recentSends.has(transformed)) {
-        recentSends.delete(transformed);
-        return;
-      }
-      recentSends.set(transformed, now);
-      ws.send(transformed);
-    }
+    wsSend(onDataTransform ? onDataTransform(data) : data);
   });
 
-  // Handle resize — debounced to avoid excessive redraws that scroll to bottom
+  // --- Resize handling ---
   let fitTimer = null;
   let lastCols = term.cols;
   let lastRows = term.rows;
@@ -157,275 +376,52 @@ export function createTerminal(container, { session, fontSize = 14, onDataTransf
     if (fitTimer) clearTimeout(fitTimer);
     fitTimer = setTimeout(() => {
       fitTimer = null;
-      const proposedDims = fitAddon.proposeDimensions();
-      if (proposedDims && (proposedDims.cols !== lastCols || proposedDims.rows !== lastRows)) {
-        lastCols = proposedDims.cols;
-        lastRows = proposedDims.rows;
+      const dims = fitAddon.proposeDimensions();
+      if (dims && (dims.cols !== lastCols || dims.rows !== lastRows)) {
+        lastCols = dims.cols;
+        lastRows = dims.rows;
         fitAddon.fit();
       }
     }, 150);
   }
 
-  const resizeObserver = new ResizeObserver(() => {
-    debouncedFit();
-  });
+  const resizeObserver = new ResizeObserver(() => debouncedFit());
   resizeObserver.observe(container);
 
   term.onResize(({ cols, rows }) => {
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ type: 'resize', cols, rows }));
-    }
+    wsSend(JSON.stringify({ type: 'resize', cols, rows }));
   });
 
   // --- Touch gestures ---
-  // Handles: scroll, swipe, pinch. Taps flow through to browser (click synthesis).
-  {
-    let touchStartY = null;
-    let touchStartX = null;
-    let scrollAccumulator = 0;
-    let lastScrollSend = 0;
-    let gestureDirection = null; // null | 'scroll' | 'swipe'
-    const PX_PER_LINE = 20;
-    const SCROLL_THROTTLE_MS = 60;
-    const SWIPE_THRESHOLD = 0.4;
-    const DIRECTION_LOCK_PX = 10;
-
-    let scrollDrainTimer = null;
-    let pinchStartDist = null;
-    let pinchStartFontSize = null;
-
-    const swipeLeftEl = document.getElementById('swipe-left');
-    const swipeRightEl = document.getElementById('swipe-right');
-
-    function flushScroll() {
-      const lines = Math.trunc(scrollAccumulator / PX_PER_LINE);
-      if (lines === 0) {
-        stopScrollDrain();
-        return;
-      }
-      // Cap lines per flush to avoid flooding tmux with redraws
-      const sign = lines > 0 ? 1 : -1;
-      const capped = Math.min(Math.abs(lines), 5);
-      scrollAccumulator -= sign * capped * PX_PER_LINE;
-      const button = sign > 0 ? 65 : 64;
-      sendKeys(`\x1b[<${button};1;1M`.repeat(capped));
-      // If there's still accumulated scroll, keep draining
-      if (Math.abs(scrollAccumulator) >= PX_PER_LINE) {
-        startScrollDrain();
-      } else {
-        stopScrollDrain();
-      }
-    }
-
-    function startScrollDrain() {
-      if (!scrollDrainTimer) {
-        scrollDrainTimer = setInterval(flushScroll, SCROLL_THROTTLE_MS);
-      }
-    }
-
-    function stopScrollDrain() {
-      if (scrollDrainTimer) {
-        clearInterval(scrollDrainTimer);
-        scrollDrainTimer = null;
-      }
-    }
-
-    // Capture-phase listeners intercept before xterm.js sees them.
-    // Single-finger touchstart is NOT prevented — lets xterm.js track focus
-    // and lets the browser synthesize click events for taps.
-    container.addEventListener('touchstart', (e) => {
-      if (e.touches.length === 2) {
-        pinchStartDist = getTouchDistance(e.touches);
-        pinchStartFontSize = term.options.fontSize;
-        touchStartY = null;
-        gestureDirection = null;
-        e.preventDefault();
-        e.stopPropagation();
-        return;
-      }
-      if (e.touches.length === 1) {
-        touchStartY = e.touches[0].clientY;
-        touchStartX = e.touches[0].clientX;
-        scrollAccumulator = 0;
-        stopScrollDrain();
-        gestureDirection = null;
-        // Do NOT preventDefault/stopPropagation — let the event flow through
-      }
-    }, { capture: true, passive: false });
-
-    container.addEventListener('touchmove', (e) => {
-      // --- Pinch zoom ---
-      if (e.touches.length === 2 && pinchStartDist !== null) {
-        const dist = getTouchDistance(e.touches);
-        const scale = dist / pinchStartDist;
-        const newSize = Math.round(pinchStartFontSize * scale);
-        if (newSize !== term.options.fontSize && newSize >= 6 && newSize <= 32) {
-          container.dispatchEvent(new CustomEvent('pinch-zoom', { detail: { fontSize: newSize } }));
-        }
-        e.preventDefault();
-        e.stopPropagation();
-        return;
-      }
-
-      if (touchStartY === null || e.touches.length !== 1) return;
-
-      const currentY = e.touches[0].clientY;
-      const currentX = e.touches[0].clientX;
-      const deltaY = touchStartY - currentY;
-      const deltaX = currentX - touchStartX;
-
-      // Before direction lock: let events flow through (first ~10px of movement)
-      if (gestureDirection === null) {
-        if (Math.abs(deltaY) > DIRECTION_LOCK_PX || Math.abs(deltaX) > DIRECTION_LOCK_PX) {
-          if (Math.abs(deltaX) > Math.abs(deltaY) * 1.5) {
-            gestureDirection = 'swipe';
-          } else {
-            gestureDirection = 'scroll';
-          }
-        } else {
-          return; // Not enough movement yet — let event flow
-        }
-      }
-
-      if (gestureDirection === 'swipe') {
-        if (swipeLeftEl && swipeRightEl) {
-          if (deltaX > DIRECTION_LOCK_PX) {
-            swipeRightEl.classList.add('visible');
-            swipeLeftEl.classList.remove('visible');
-          } else if (deltaX < -DIRECTION_LOCK_PX) {
-            swipeLeftEl.classList.add('visible');
-            swipeRightEl.classList.remove('visible');
-          } else {
-            swipeLeftEl.classList.remove('visible');
-            swipeRightEl.classList.remove('visible');
-          }
-        }
-        e.preventDefault();
-        e.stopPropagation();
-        return;
-      }
-
-      if (gestureDirection === 'scroll') {
-        const delta = touchStartY - currentY;
-        touchStartY = currentY;
-        if (Math.abs(delta) < 2) return;
-
-        scrollAccumulator += delta;
-
-        // Throttle: accumulate movement, flush at most every 60ms
-        const now = Date.now();
-        if (now - lastScrollSend >= SCROLL_THROTTLE_MS) {
-          flushScroll();
-          lastScrollSend = now;
-        }
-        e.preventDefault();
-        e.stopPropagation();
-      }
-    }, { capture: true, passive: false });
-
-    container.addEventListener('touchend', (e) => {
-      // --- Pinch end ---
-      if (pinchStartDist !== null && e.touches.length < 2) {
-        pinchStartDist = null;
-        pinchStartFontSize = null;
-        e.preventDefault();
-        e.stopPropagation();
-        return;
-      }
-
-      // --- Swipe end ---
-      if (gestureDirection === 'swipe' && touchStartX !== null) {
-        const endX = e.changedTouches[0]?.clientX ?? touchStartX;
-        const deltaX = endX - touchStartX;
-        const screenWidth = window.innerWidth;
-
-        if (Math.abs(deltaX) > screenWidth * SWIPE_THRESHOLD) {
-          container.dispatchEvent(new CustomEvent('swipe-session', {
-            detail: { direction: deltaX > 0 ? 'next' : 'prev' },
-          }));
-        }
-      }
-
-      // If a gesture was active, suppress the browser's click synthesis
-      if (gestureDirection !== null) {
-        // Flush any remaining scroll before resetting
-        if (gestureDirection === 'scroll') {
-          flushScroll();
-        }
-        e.preventDefault();
-      }
-      // If no gesture (tap): let event flow — browser synthesizes click
-
-      // Hide arrows
-      if (swipeLeftEl) swipeLeftEl.classList.remove('visible');
-      if (swipeRightEl) swipeRightEl.classList.remove('visible');
-
-      touchStartY = null;
-      touchStartX = null;
-      scrollAccumulator = 0;
-      gestureDirection = null;
-    }, { capture: true, passive: false });
-  }
-
-  function getTouchDistance(touches) {
-    const dx = touches[0].clientX - touches[1].clientX;
-    const dy = touches[0].clientY - touches[1].clientY;
-    return Math.sqrt(dx * dx + dy * dy);
-  }
+  function sendKeys(seq) { wsSend(seq); }
+  setupTouchGestures(container, term, sendKeys);
 
   function setFontSize(size) {
     term.options.fontSize = size;
-    lastCols = 0; // force re-fit
+    lastCols = 0;
     lastRows = 0;
     fitAddon.fit();
   }
 
-  function fit() {
-    debouncedFit();
-  }
-
-  function sendKeys(seq) {
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(seq);
-    }
-  }
-
   function switchWindow(targetSession, windowIndex) {
     currentSession = targetSession;
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({
-        type: 'switch',
-        session: targetSession,
-        window: windowIndex,
-      }));
-    }
+    wsSend(JSON.stringify({ type: 'switch', session: targetSession, window: windowIndex }));
   }
 
   function newWindow(targetSession) {
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({
-        type: 'new-window',
-        session: targetSession,
-      }));
-    }
+    wsSend(JSON.stringify({ type: 'new-window', session: targetSession }));
   }
 
   function newSession(name) {
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ type: 'new-session', name }));
-    }
+    wsSend(JSON.stringify({ type: 'new-session', name }));
   }
 
   function killSession(name) {
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ type: 'kill-session', name }));
-    }
+    wsSend(JSON.stringify({ type: 'kill-session', name }));
   }
 
-  function killWindow(session, windowIndex) {
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ type: 'kill-window', session, window: windowIndex }));
-    }
+  function killWindow(sessionName, windowIndex) {
+    wsSend(JSON.stringify({ type: 'kill-window', session: sessionName, window: windowIndex }));
   }
 
   function dispose() {
@@ -436,5 +432,9 @@ export function createTerminal(container, { session, fontSize = 14, onDataTransf
     term.dispose();
   }
 
-  return { term, fit, searchAddon, setFontSize, sendKeys, switchWindow, newWindow, newSession, killSession, killWindow, dispose };
+  return {
+    term, searchAddon, setFontSize, sendKeys, switchWindow,
+    newWindow, newSession, killSession, killWindow, dispose,
+    fit: debouncedFit,
+  };
 }

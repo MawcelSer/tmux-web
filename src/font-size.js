@@ -32,6 +32,9 @@ export class FontSizeManager {
 
   onChange(cb) {
     this._listeners.push(cb);
+    return () => {
+      this._listeners = this._listeners.filter((l) => l !== cb);
+    };
   }
 
   _clamp(val) {
