@@ -107,49 +107,91 @@ function setupTouchGestures(container, term, sendKeysFn) {
   let touchStartY = null;
   let touchStartX = null;
   let scrollAccumulator = 0;
-  let lastScrollSend = 0;
   let gestureDirection = null; // null | 'scroll' | 'swipe'
-  const PX_PER_LINE = 20;
-  const SCROLL_THROTTLE_MS = 60;
+  const PX_PER_LINE = 14;
   const SWIPE_THRESHOLD = 0.4;
   const DIRECTION_LOCK_PX = 10;
 
-  let scrollDrainTimer = null;
   let pinchStartDist = null;
   let pinchStartFontSize = null;
+
+  // RAF-based scroll flush (replaces throttle + drain timer)
+  let scrollRafId = null;
+
+  // Momentum state
+  const FRICTION = 0.94;
+  const MIN_VELOCITY = 0.3;
+  const VELOCITY_WINDOW = 4;
+  let velocitySamples = [];
+  let momentumRafId = null;
+  let momentumVelocity = 0;
 
   const swipeLeftEl = document.getElementById('swipe-left');
   const swipeRightEl = document.getElementById('swipe-right');
 
   function flushScroll() {
     const lines = Math.trunc(scrollAccumulator / PX_PER_LINE);
-    if (lines === 0) {
-      stopScrollDrain();
-      return;
-    }
-    const sign = lines > 0 ? 1 : -1;
-    const capped = Math.min(Math.abs(lines), 5);
-    scrollAccumulator -= sign * capped * PX_PER_LINE;
-    const button = sign > 0 ? 65 : 64;
-    sendKeysFn(`\x1b[<${button};1;1M`.repeat(capped));
-    if (Math.abs(scrollAccumulator) >= PX_PER_LINE) {
-      startScrollDrain();
-    } else {
-      stopScrollDrain();
+    if (lines === 0) return;
+    scrollAccumulator -= lines * PX_PER_LINE;
+    const button = lines > 0 ? 65 : 64;
+    sendKeysFn(`\x1b[<${button};1;1M`.repeat(Math.abs(lines)));
+  }
+
+  function scheduleScrollFlush() {
+    if (scrollRafId === null) {
+      scrollRafId = requestAnimationFrame(() => {
+        scrollRafId = null;
+        flushScroll();
+      });
     }
   }
 
-  function startScrollDrain() {
-    if (!scrollDrainTimer) {
-      scrollDrainTimer = setInterval(flushScroll, SCROLL_THROTTLE_MS);
+  function cancelScrollFlush() {
+    if (scrollRafId !== null) {
+      cancelAnimationFrame(scrollRafId);
+      scrollRafId = null;
     }
   }
 
-  function stopScrollDrain() {
-    if (scrollDrainTimer) {
-      clearInterval(scrollDrainTimer);
-      scrollDrainTimer = null;
+  function cancelMomentum() {
+    if (momentumRafId !== null) {
+      cancelAnimationFrame(momentumRafId);
+      momentumRafId = null;
     }
+    momentumVelocity = 0;
+  }
+
+  function computeReleaseVelocity() {
+    if (velocitySamples.length < 2) return 0;
+    const recent = velocitySamples.slice(-VELOCITY_WINDOW);
+    let totalDelta = 0;
+    let totalTime = 0;
+    for (let i = 1; i < recent.length; i++) {
+      totalDelta += recent[i].delta;
+      totalTime += recent[i].time - recent[i - 1].time;
+    }
+    if (totalTime === 0) return 0;
+    return totalDelta / totalTime; // px per ms
+  }
+
+  function startMomentum() {
+    const velocity = computeReleaseVelocity();
+    // Convert px/ms to px/frame (~16ms)
+    momentumVelocity = velocity * 16;
+    if (Math.abs(momentumVelocity) < MIN_VELOCITY) return;
+
+    function tick() {
+      momentumVelocity *= FRICTION;
+      if (Math.abs(momentumVelocity) < MIN_VELOCITY) {
+        momentumRafId = null;
+        flushScroll();
+        return;
+      }
+      scrollAccumulator += momentumVelocity;
+      flushScroll();
+      momentumRafId = requestAnimationFrame(tick);
+    }
+    momentumRafId = requestAnimationFrame(tick);
   }
 
   container.addEventListener('touchstart', (e) => {
@@ -163,11 +205,13 @@ function setupTouchGestures(container, term, sendKeysFn) {
       return;
     }
     if (e.touches.length === 1) {
+      cancelMomentum();
+      cancelScrollFlush();
       touchStartY = e.touches[0].clientY;
       touchStartX = e.touches[0].clientX;
       scrollAccumulator = 0;
-      stopScrollDrain();
       gestureDirection = null;
+      velocitySamples = [{ delta: 0, time: Date.now() }];
     }
   }, { capture: true, passive: false });
 
@@ -191,6 +235,10 @@ function setupTouchGestures(container, term, sendKeysFn) {
     const deltaY = touchStartY - currentY;
     const deltaX = currentX - touchStartX;
 
+    // Always claim the touch from the browser during direction detection
+    e.preventDefault();
+    e.stopPropagation();
+
     if (gestureDirection === null) {
       if (Math.abs(deltaY) > DIRECTION_LOCK_PX || Math.abs(deltaX) > DIRECTION_LOCK_PX) {
         gestureDirection = Math.abs(deltaX) > Math.abs(deltaY) * 1.5 ? 'swipe' : 'scroll';
@@ -212,24 +260,21 @@ function setupTouchGestures(container, term, sendKeysFn) {
           swipeRightEl.classList.remove('visible');
         }
       }
-      e.preventDefault();
-      e.stopPropagation();
       return;
     }
 
     if (gestureDirection === 'scroll') {
       const delta = touchStartY - currentY;
       touchStartY = currentY;
-      if (Math.abs(delta) < 2) return;
+      if (Math.abs(delta) < 1) return;
+
+      velocitySamples.push({ delta, time: Date.now() });
+      if (velocitySamples.length > VELOCITY_WINDOW + 1) {
+        velocitySamples.shift();
+      }
 
       scrollAccumulator += delta;
-      const now = Date.now();
-      if (now - lastScrollSend >= SCROLL_THROTTLE_MS) {
-        flushScroll();
-        lastScrollSend = now;
-      }
-      e.preventDefault();
-      e.stopPropagation();
+      scheduleScrollFlush();
     }
   }, { capture: true, passive: false });
 
@@ -253,7 +298,11 @@ function setupTouchGestures(container, term, sendKeysFn) {
     }
 
     if (gestureDirection !== null) {
-      if (gestureDirection === 'scroll') flushScroll();
+      if (gestureDirection === 'scroll') {
+        cancelScrollFlush();
+        flushScroll();
+        startMomentum();
+      }
       e.preventDefault();
     }
 
@@ -262,8 +311,20 @@ function setupTouchGestures(container, term, sendKeysFn) {
 
     touchStartY = null;
     touchStartX = null;
+    gestureDirection = null;
+    velocitySamples = [];
+  }, { capture: true, passive: false });
+
+  container.addEventListener('touchcancel', () => {
+    cancelMomentum();
+    cancelScrollFlush();
+    if (swipeLeftEl) swipeLeftEl.classList.remove('visible');
+    if (swipeRightEl) swipeRightEl.classList.remove('visible');
+    touchStartY = null;
+    touchStartX = null;
     scrollAccumulator = 0;
     gestureDirection = null;
+    velocitySamples = [];
   }, { capture: true, passive: false });
 }
 
