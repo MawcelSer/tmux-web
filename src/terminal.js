@@ -352,6 +352,7 @@ export function createTerminal(container, { session, fontSize = 14, onDataTransf
   const helperTextarea = container.querySelector('.xterm-helper-textarea');
   if (helperTextarea) {
     helperTextarea.setAttribute('autocapitalize', 'none');
+    helperTextarea.setAttribute('inputmode', 'url');
   }
 
   patchSwiftKeyComposition(term);
