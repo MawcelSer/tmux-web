@@ -1,16 +1,17 @@
-import '@xterm/xterm/css/xterm.css';
-import { createTerminal } from './terminal.js';
-import { createToolbar } from './toolbar.js';
-import { FontSizeManager } from './font-size.js';
-import { createSessionSwitcher } from './session-switcher.js';
+import "@xterm/xterm/css/xterm.css";
+import { createTerminal } from "./terminal.js";
+import { createToolbar } from "./toolbar.js";
+import { FontSizeManager } from "./font-size.js";
+import { createSessionSwitcher } from "./session-switcher.js";
 
-const LAST_SESSION_KEY = 'tmuxweb:lastSession';
+const LAST_SESSION_KEY = "tmuxweb:lastSession";
 const urlParams = new URLSearchParams(location.search);
-const initialSession = urlParams.get('session') || localStorage.getItem(LAST_SESSION_KEY) || '';
+const initialSession =
+  urlParams.get("session") || localStorage.getItem(LAST_SESSION_KEY) || "";
 
 const fontMgr = new FontSizeManager();
 
-const termContainer = document.getElementById('terminal-container');
+const termContainer = document.getElementById("terminal-container");
 
 // Toolbar ref (assigned after createToolbar, used lazily in onDataTransform)
 let toolbar;
@@ -29,7 +30,7 @@ const terminal = createTerminal(termContainer, {
 
 fontMgr.onChange((size) => terminal.setFontSize(size));
 
-toolbar = createToolbar(document.getElementById('toolbar-container'), {
+toolbar = createToolbar(document.getElementById("toolbar-container"), {
   onKey: (seq) => terminal.sendKeys(seq),
   onIncrease: () => fontMgr.increase(),
   onDecrease: () => fontMgr.decrease(),
@@ -37,46 +38,50 @@ toolbar = createToolbar(document.getElementById('toolbar-container'), {
 
 // Session list cache for swipe navigation
 let sessionList = [];
-let currentSessionIndex = -1;
+
+function currentSessionIndex() {
+  const current = switcher.getCurrentSession();
+  return current ? sessionList.indexOf(current) : -1;
+}
 
 function activateSession(name) {
   terminal.switchWindow(name, null);
   switcher.setCurrentSession(name);
-  currentSessionIndex = sessionList.indexOf(name);
   localStorage.setItem(LAST_SESSION_KEY, name);
+}
+
+function activateFirstAvailableSession() {
+  if (sessionList.length > 0) activateSession(sessionList[0]);
 }
 
 async function refreshSessionList() {
   try {
-    const res = await fetch('/api/sessions');
+    const res = await fetch("/api/sessions");
     const data = await res.json();
     sessionList = data.sessions.map((s) => s.name);
-    if (switcher.getCurrentSession()) {
-      currentSessionIndex = sessionList.indexOf(switcher.getCurrentSession());
-    } else if (data.sessions.length > 0) {
+    if (!switcher.getCurrentSession() && data.sessions.length > 0) {
       // No session selected yet — pick attached session or first available
       const attached = data.sessions.find((s) => s.attached);
       const target = attached ? attached.name : data.sessions[0].name;
       activateSession(target);
     }
   } catch (err) {
-    console.error('refreshSessionList failed:', err);
+    console.error("refreshSessionList failed:", err);
   }
 }
 
 const switcher = createSessionSwitcher({
-  panel: document.getElementById('switcher-panel'),
-  list: document.getElementById('switcher-list'),
-  title: document.getElementById('switcher-title'),
-  closeBtn: document.getElementById('switcher-close'),
-  sessionsBtn: document.getElementById('btn-sessions'),
-  windowsBtn: document.getElementById('btn-windows'),
-  currentLabel: document.getElementById('current-session'),
+  panel: document.getElementById("switcher-panel"),
+  list: document.getElementById("switcher-list"),
+  title: document.getElementById("switcher-title"),
+  closeBtn: document.getElementById("switcher-close"),
+  sessionsBtn: document.getElementById("btn-sessions"),
+  windowsBtn: document.getElementById("btn-windows"),
+  currentLabel: document.getElementById("current-session"),
   onSwitch: (session, windowIndex) => {
     if (windowIndex != null) {
       terminal.switchWindow(session, windowIndex);
       switcher.setCurrentSession(session);
-      currentSessionIndex = sessionList.indexOf(session);
       localStorage.setItem(LAST_SESSION_KEY, session);
     } else {
       activateSession(session);
@@ -97,7 +102,7 @@ const switcher = createSessionSwitcher({
     if (isCurrentSession) {
       pollUntil(
         () => !sessionList.includes(name),
-        () => { if (sessionList.length > 0) activateSession(sessionList[0]); },
+        activateFirstAvailableSession,
       );
     }
   },
@@ -113,20 +118,20 @@ if (initialSession) {
 refreshSessionList();
 
 // --- Tap terminal = close switcher panel + focus ---
-termContainer.addEventListener('click', () => {
+termContainer.addEventListener("click", () => {
   switcher.hide();
   terminal.term.focus();
 });
 
 // --- Swipe to switch sessions ---
-termContainer.addEventListener('swipe-session', async (e) => {
+termContainer.addEventListener("swipe-session", async (e) => {
   await refreshSessionList();
   if (sessionList.length < 2) return;
 
-  let idx = currentSessionIndex;
+  let idx = currentSessionIndex();
   if (idx < 0) idx = 0;
 
-  if (e.detail.direction === 'next') {
+  if (e.detail.direction === "next") {
     idx = (idx + 1) % sessionList.length;
   } else {
     idx = (idx - 1 + sessionList.length) % sessionList.length;
@@ -136,7 +141,7 @@ termContainer.addEventListener('swipe-session', async (e) => {
 });
 
 // --- Pinch zoom → font size ---
-termContainer.addEventListener('pinch-zoom', (e) => {
+termContainer.addEventListener("pinch-zoom", (e) => {
   fontMgr.set(e.detail.fontSize);
 });
 
@@ -148,8 +153,8 @@ if (window.visualViewport) {
     document.body.style.transform = `translateY(${vv.offsetTop}px)`;
     terminal.fit();
   };
-  window.visualViewport.addEventListener('resize', onViewportResize);
-  window.visualViewport.addEventListener('scroll', onViewportResize);
+  window.visualViewport.addEventListener("resize", onViewportResize);
+  window.visualViewport.addEventListener("scroll", onViewportResize);
 }
 
 /** Retry refreshSessionList until condition is met, then run callback. */
@@ -169,13 +174,16 @@ function applyModifiers(data, ctrl, alt) {
   let result = data;
   if (ctrl && data.length === 1) {
     const code = data.charCodeAt(0);
-    if (code >= 97 && code <= 122) result = String.fromCharCode(code - 96);       // a-z
-    else if (code >= 65 && code <= 90) result = String.fromCharCode(code - 64);    // A-Z
-    else if (code >= 91 && code <= 95) result = String.fromCharCode(code - 64);    // [\]^_
-    else if (code === 32) result = '\x00';                                          // space
+    if (code >= 97 && code <= 122)
+      result = String.fromCharCode(code - 96); // a-z
+    else if (code >= 65 && code <= 90)
+      result = String.fromCharCode(code - 64); // A-Z
+    else if (code >= 91 && code <= 95)
+      result = String.fromCharCode(code - 64); // [\]^_
+    else if (code === 32) result = "\x00"; // space
   }
   if (alt) {
-    result = '\x1b' + result;
+    result = "\x1b" + result;
   }
   return result;
 }

@@ -40,8 +40,11 @@ def set_nonblock(fd):
 
 def main():
     session = sys.argv[1] if len(sys.argv) > 1 else ''
-    cols = int(sys.argv[2]) if len(sys.argv) > 2 else 80
-    rows = int(sys.argv[3]) if len(sys.argv) > 3 else 24
+    try:
+        cols = int(sys.argv[2]) if len(sys.argv) > 2 else 80
+        rows = int(sys.argv[3]) if len(sys.argv) > 3 else 24
+    except ValueError:
+        cols, rows = 80, 24
 
     # Build tmux command
     if session:

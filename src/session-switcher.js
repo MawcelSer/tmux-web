@@ -3,8 +3,16 @@
  */
 
 const SESSION_COLORS = [
-  '#58a6ff', '#3fb950', '#d29922', '#bc8cff', '#f85149',
-  '#39d353', '#79c0ff', '#d2a8ff', '#ff7b72', '#e3b341',
+  "#58a6ff",
+  "#3fb950",
+  "#d29922",
+  "#bc8cff",
+  "#f85149",
+  "#39d353",
+  "#79c0ff",
+  "#d2a8ff",
+  "#ff7b72",
+  "#e3b341",
 ];
 
 function sessionColor(name) {
@@ -15,26 +23,54 @@ function sessionColor(name) {
   return SESSION_COLORS[Math.abs(hash) % SESSION_COLORS.length];
 }
 
-export function createSessionSwitcher({ panel, list, title, closeBtn, sessionsBtn, windowsBtn, currentLabel, onSwitch, onNewWindow, onNewSession, onKillSession, onKillWindow }) {
-  let currentSession = '';
+function setListMessage(list, message) {
+  const li = document.createElement("li");
+  li.textContent = message;
+  list.replaceChildren(li);
+}
+
+function createSpanItem(text, className) {
+  const el = document.createElement("li");
+  el.className = className;
+  const span = document.createElement("span");
+  span.textContent = text;
+  el.appendChild(span);
+  return el;
+}
+
+export function createSessionSwitcher({
+  panel,
+  list,
+  title,
+  closeBtn,
+  sessionsBtn,
+  windowsBtn,
+  currentLabel,
+  onSwitch,
+  onNewWindow,
+  onNewSession,
+  onKillSession,
+  onKillWindow,
+}) {
+  let currentSession = "";
 
   function hide() {
-    panel.classList.add('hidden');
+    panel.classList.add("hidden");
   }
 
   function show() {
-    panel.classList.remove('hidden');
+    panel.classList.remove("hidden");
   }
 
-  closeBtn.addEventListener('click', hide);
+  closeBtn.addEventListener("click", hide);
 
-  sessionsBtn.addEventListener('click', async () => {
-    title.textContent = 'Sessions';
+  sessionsBtn.addEventListener("click", async () => {
+    title.textContent = "Sessions";
     show();
     await loadSessions();
   });
 
-  windowsBtn.addEventListener('click', async () => {
+  windowsBtn.addEventListener("click", async () => {
     if (!currentSession) return;
     title.textContent = `Windows — ${currentSession}`;
     show();
@@ -48,62 +84,72 @@ export function createSessionSwitcher({ panel, list, title, closeBtn, sessionsBt
   function attachLongPress(li, badgeSpan, killBtn) {
     let pressTimer = null;
 
-    li.addEventListener('touchstart', (e) => {
-      pressTimer = setTimeout(() => {
-        pressTimer = null;
-        killBtn.classList.remove('hidden');
-        badgeSpan.classList.add('hidden');
-        if (navigator.vibrate) navigator.vibrate(30);
-      }, 500);
-    }, { passive: true });
+    li.addEventListener(
+      "touchstart",
+      (e) => {
+        pressTimer = setTimeout(() => {
+          pressTimer = null;
+          killBtn.classList.remove("hidden");
+          badgeSpan.classList.add("hidden");
+          if (navigator.vibrate) navigator.vibrate(30);
+        }, 500);
+      },
+      { passive: true },
+    );
 
-    li.addEventListener('touchmove', () => {
-      if (pressTimer) {
-        clearTimeout(pressTimer);
-        pressTimer = null;
-      }
-    }, { passive: true });
+    li.addEventListener(
+      "touchmove",
+      () => {
+        if (pressTimer) {
+          clearTimeout(pressTimer);
+          pressTimer = null;
+        }
+      },
+      { passive: true },
+    );
 
-    li.addEventListener('touchend', () => {
-      if (pressTimer) {
-        clearTimeout(pressTimer);
-        pressTimer = null;
-      }
-    }, { passive: true });
+    li.addEventListener(
+      "touchend",
+      () => {
+        if (pressTimer) {
+          clearTimeout(pressTimer);
+          pressTimer = null;
+        }
+      },
+      { passive: true },
+    );
 
     // Tapping the row when kill is visible → dismiss
-    li.addEventListener('click', (e) => {
-      if (!killBtn.classList.contains('hidden') && e.target !== killBtn) {
-        killBtn.classList.add('hidden');
-        badgeSpan.classList.remove('hidden');
+    li.addEventListener("click", (e) => {
+      if (!killBtn.classList.contains("hidden") && e.target !== killBtn) {
+        killBtn.classList.add("hidden");
+        badgeSpan.classList.remove("hidden");
         e.stopPropagation();
       }
     });
   }
 
   async function loadSessions() {
-    list.innerHTML = '<li>Loading...</li>';
+    setListMessage(list, "Loading...");
     try {
-      const res = await fetch('/api/sessions');
+      const res = await fetch("/api/sessions");
       const data = await res.json();
-      list.innerHTML = '';
+      list.replaceChildren();
 
       // "+ New Session" button at top
-      const newSessLi = document.createElement('li');
-      newSessLi.className = 'switcher-new-session';
-      newSessLi.innerHTML = '<span>+ New Session</span>';
-      newSessLi.addEventListener('click', () => {
-        newSessLi.innerHTML = '';
-        const input = document.createElement('input');
-        input.type = 'text';
-        input.className = 'switcher-input';
-        input.placeholder = 'Session name...';
-        input.setAttribute('autocapitalize', 'off');
-        input.setAttribute('autocorrect', 'off');
+      const newSessLi = createSpanItem("+ New Session", "switcher-new-session");
+      newSessLi.addEventListener("click", () => {
+        newSessLi.replaceChildren();
+        const input = document.createElement("input");
+        input.type = "text";
+        input.className = "switcher-input";
+        input.placeholder = "Session name...";
+        input.setAttribute("autocapitalize", "off");
+        input.setAttribute("autocorrect", "off");
 
-        const createBtn = document.createElement('button');
-        createBtn.className = 'switcher-confirm-btn';
-        createBtn.textContent = 'Create';
+        const createBtn = document.createElement("button");
+        createBtn.className = "switcher-confirm-btn";
+        createBtn.textContent = "Create";
 
         newSessLi.appendChild(input);
         newSessLi.appendChild(createBtn);
@@ -112,51 +158,51 @@ export function createSessionSwitcher({ panel, list, title, closeBtn, sessionsBt
         function submitNewSession() {
           const name = input.value.trim();
           if (!name || !/^[\w\-. ]+$/.test(name)) {
-            input.style.borderColor = '#f85149';
+            input.style.borderColor = "#f85149";
             return;
           }
           onNewSession(name);
           hide();
         }
 
-        createBtn.addEventListener('click', (e) => {
+        createBtn.addEventListener("click", (e) => {
           e.stopPropagation();
           submitNewSession();
         });
 
-        input.addEventListener('keydown', (e) => {
-          if (e.key === 'Enter') {
+        input.addEventListener("keydown", (e) => {
+          if (e.key === "Enter") {
             e.preventDefault();
             submitNewSession();
-          } else if (e.key === 'Escape') {
+          } else if (e.key === "Escape") {
             e.preventDefault();
             loadSessions();
           }
         });
 
-        input.addEventListener('click', (e) => e.stopPropagation());
+        input.addEventListener("click", (e) => e.stopPropagation());
       });
       list.appendChild(newSessLi);
 
       if (data.sessions.length === 0) {
-        const li = document.createElement('li');
-        li.textContent = 'No tmux sessions';
+        const li = document.createElement("li");
+        li.textContent = "No tmux sessions";
         list.appendChild(li);
         return;
       }
       for (const sess of data.sessions) {
-        const li = document.createElement('li');
+        const li = document.createElement("li");
 
-        const contentSpan = document.createElement('span');
+        const contentSpan = document.createElement("span");
         contentSpan.textContent = `${sess.name} (${sess.windows} win)`;
 
-        const badgeSpan = document.createElement('span');
-        badgeSpan.className = `badge ${sess.attached ? 'attached' : ''}`;
-        badgeSpan.textContent = sess.attached ? 'attached' : 'detached';
+        const badgeSpan = document.createElement("span");
+        badgeSpan.className = `badge ${sess.attached ? "attached" : ""}`;
+        badgeSpan.textContent = sess.attached ? "attached" : "detached";
 
-        const killBtn = document.createElement('button');
-        killBtn.className = 'switcher-kill-btn hidden';
-        killBtn.textContent = 'Kill';
+        const killBtn = document.createElement("button");
+        killBtn.className = "switcher-kill-btn hidden";
+        killBtn.textContent = "Kill";
 
         li.appendChild(contentSpan);
         li.appendChild(badgeSpan);
@@ -164,14 +210,14 @@ export function createSessionSwitcher({ panel, list, title, closeBtn, sessionsBt
 
         const isCurrentSession = sess.name === currentSession;
 
-        killBtn.addEventListener('click', (e) => {
+        killBtn.addEventListener("click", (e) => {
           e.stopPropagation();
           onKillSession(sess.name, isCurrentSession);
           hide();
         });
 
-        contentSpan.addEventListener('click', () => {
-          if (!killBtn.classList.contains('hidden')) return;
+        contentSpan.addEventListener("click", () => {
+          if (!killBtn.classList.contains("hidden")) return;
           setCurrentSession(sess.name);
           onSwitch(sess.name, null);
           hide();
@@ -181,60 +227,58 @@ export function createSessionSwitcher({ panel, list, title, closeBtn, sessionsBt
         list.appendChild(li);
       }
     } catch (err) {
-      console.error('loadSessions failed:', err);
-      list.innerHTML = '<li>Error loading sessions</li>';
+      console.error("loadSessions failed:", err);
+      setListMessage(list, "Error loading sessions");
     }
   }
 
   async function loadWindows(session) {
-    list.innerHTML = '<li>Loading...</li>';
+    setListMessage(list, "Loading...");
     try {
       const res = await fetch(`/api/windows/${encodeURIComponent(session)}`);
       const data = await res.json();
-      list.innerHTML = '';
+      list.replaceChildren();
 
       // "New Window" button at the top
-      const newWinLi = document.createElement('li');
-      newWinLi.className = 'switcher-new-window';
-      newWinLi.innerHTML = '<span>+ New Window</span>';
-      newWinLi.addEventListener('click', () => {
+      const newWinLi = createSpanItem("+ New Window", "switcher-new-window");
+      newWinLi.addEventListener("click", () => {
         onNewWindow(session);
         hide();
       });
       list.appendChild(newWinLi);
 
       if (data.windows.length === 0) {
-        const li = document.createElement('li');
-        li.textContent = 'No windows';
+        const li = document.createElement("li");
+        li.textContent = "No windows";
         list.appendChild(li);
         return;
       }
       for (const win of data.windows) {
-        const li = document.createElement('li');
+        const li = document.createElement("li");
 
-        const contentSpan = document.createElement('span');
+        const contentSpan = document.createElement("span");
         contentSpan.textContent = `${win.index}: ${win.name}`;
 
-        const badgeSpan = document.createElement('span');
-        badgeSpan.className = `badge ${win.active ? 'attached' : ''}`;
-        badgeSpan.textContent = win.active ? 'active' : '';
+        const badgeSpan = document.createElement("span");
+        badgeSpan.className = `badge ${win.active ? "attached" : ""}`;
+        badgeSpan.textContent = win.active ? "active" : "";
 
-        const killBtn = document.createElement('button');
-        killBtn.className = 'switcher-kill-btn hidden';
-        killBtn.textContent = 'Kill';
+        const killBtn = document.createElement("button");
+        killBtn.className = "switcher-kill-btn hidden";
+        killBtn.textContent = "Kill";
 
         li.appendChild(contentSpan);
         li.appendChild(badgeSpan);
         li.appendChild(killBtn);
 
-        killBtn.addEventListener('click', (e) => {
+        killBtn.addEventListener("click", (e) => {
           e.stopPropagation();
           onKillWindow(session, win.index);
           hide();
         });
 
-        contentSpan.addEventListener('click', () => {
-          if (!killBtn.classList.contains('hidden')) return;
+        contentSpan.addEventListener("click", () => {
+          if (!killBtn.classList.contains("hidden")) return;
           onSwitch(session, win.index);
           hide();
         });
@@ -243,16 +287,16 @@ export function createSessionSwitcher({ panel, list, title, closeBtn, sessionsBt
         list.appendChild(li);
       }
     } catch (err) {
-      console.error('loadWindows failed:', err);
-      list.innerHTML = '<li>Error loading windows</li>';
+      console.error("loadWindows failed:", err);
+      setListMessage(list, "Error loading windows");
     }
   }
 
   function setCurrentSession(name) {
     currentSession = name;
-    currentLabel.textContent = name || '—';
-    currentLabel.style.color = name ? sessionColor(name) : '#8b949e';
-    currentLabel.style.fontWeight = name ? '600' : 'normal';
+    currentLabel.textContent = name || "—";
+    currentLabel.style.color = name ? sessionColor(name) : "#8b949e";
+    currentLabel.style.fontWeight = name ? "600" : "normal";
   }
 
   return {
@@ -261,6 +305,8 @@ export function createSessionSwitcher({ panel, list, title, closeBtn, sessionsBt
     show,
     loadSessions,
     loadWindows,
-    getCurrentSession() { return currentSession; },
+    getCurrentSession() {
+      return currentSession;
+    },
   };
 }

@@ -1,30 +1,30 @@
-import { Terminal } from '@xterm/xterm';
-import { FitAddon } from '@xterm/addon-fit';
-import { WebLinksAddon } from '@xterm/addon-web-links';
-import { SearchAddon } from '@xterm/addon-search';
+import { Terminal } from "@xterm/xterm";
+import { FitAddon } from "@xterm/addon-fit";
+import { WebLinksAddon } from "@xterm/addon-web-links";
+import { SearchAddon } from "@xterm/addon-search";
 
 const THEME = {
-  background: '#101b2c',
-  foreground: '#c9d1d9',
-  cursor: '#58a6ff',
-  cursorAccent: '#101b2c',
-  selectionBackground: 'rgba(31, 111, 235, 0.3)',
-  black: '#101b2c',
-  red: '#f85149',
-  green: '#3fb950',
-  yellow: '#d29922',
-  blue: '#58a6ff',
-  magenta: '#bc8cff',
-  cyan: '#39d353',
-  white: '#c9d1d9',
-  brightBlack: '#484f58',
-  brightRed: '#ff7b72',
-  brightGreen: '#56d364',
-  brightYellow: '#e3b341',
-  brightBlue: '#79c0ff',
-  brightMagenta: '#d2a8ff',
-  brightCyan: '#56d364',
-  brightWhite: '#f0f6fc',
+  background: "#101b2c",
+  foreground: "#c9d1d9",
+  cursor: "#58a6ff",
+  cursorAccent: "#101b2c",
+  selectionBackground: "rgba(31, 111, 235, 0.3)",
+  black: "#101b2c",
+  red: "#f85149",
+  green: "#3fb950",
+  yellow: "#d29922",
+  blue: "#58a6ff",
+  magenta: "#bc8cff",
+  cyan: "#39d353",
+  white: "#c9d1d9",
+  brightBlack: "#484f58",
+  brightRed: "#ff7b72",
+  brightGreen: "#56d364",
+  brightYellow: "#e3b341",
+  brightBlue: "#79c0ff",
+  brightMagenta: "#d2a8ff",
+  brightCyan: "#56d364",
+  brightWhite: "#f0f6fc",
 };
 
 /**
@@ -42,18 +42,20 @@ function patchSwiftKeyComposition(term) {
   const core = term._core;
   const compHelper = core?._compositionHelper;
 
-  if (!compHelper ||
-      typeof compHelper._handleAnyTextareaChanges !== 'function' ||
-      !('_isComposing' in compHelper) ||
-      !('_coreService' in compHelper) ||
-      !('_textarea' in compHelper)) {
+  if (
+    !compHelper ||
+    typeof compHelper._handleAnyTextareaChanges !== "function" ||
+    !("_isComposing" in compHelper) ||
+    !("_coreService" in compHelper) ||
+    !("_textarea" in compHelper)
+  ) {
     return;
   }
 
   let firstOldValue = null;
   let pendingTimer = null;
 
-  compHelper._handleAnyTextareaChanges = function() {
+  compHelper._handleAnyTextareaChanges = function () {
     if (firstOldValue === null) {
       firstOldValue = this._textarea.value;
     }
@@ -69,21 +71,30 @@ function patchSwiftKeyComposition(term) {
 
       let prefixLen = 0;
       const minLen = Math.min(oldValue.length, newValue.length);
-      while (prefixLen < minLen && oldValue[prefixLen] === newValue[prefixLen]) {
+      while (
+        prefixLen < minLen &&
+        oldValue[prefixLen] === newValue[prefixLen]
+      ) {
         prefixLen++;
       }
 
       let suffixLen = 0;
-      while (suffixLen < (minLen - prefixLen) &&
-             oldValue[oldValue.length - 1 - suffixLen] === newValue[newValue.length - 1 - suffixLen]) {
+      while (
+        suffixLen < minLen - prefixLen &&
+        oldValue[oldValue.length - 1 - suffixLen] ===
+          newValue[newValue.length - 1 - suffixLen]
+      ) {
         suffixLen++;
       }
 
-      const deleted = oldValue.substring(prefixLen, oldValue.length - suffixLen);
+      const deleted = oldValue.substring(
+        prefixLen,
+        oldValue.length - suffixLen,
+      );
       const added = newValue.substring(prefixLen, newValue.length - suffixLen);
 
       for (let k = 0; k < deleted.length; k++) {
-        this._coreService.triggerDataEvent('\x7f', true);
+        this._coreService.triggerDataEvent("\x7f", true);
       }
       if (added.length > 0) {
         this._dataAlreadySent = added;
@@ -101,7 +112,7 @@ function getTouchDistance(touches) {
 
 /**
  * Set up touch gestures: scroll, swipe, pinch.
- * Taps flow through to browser (click synthesis).
+ * Taps are re-synthesized as mouse events; gestures suppress focus/keyboard.
  */
 function setupTouchGestures(container, term, sendKeysFn) {
   let touchStartY = null;
@@ -126,8 +137,8 @@ function setupTouchGestures(container, term, sendKeysFn) {
   let momentumRafId = null;
   let momentumVelocity = 0;
 
-  const swipeLeftEl = document.getElementById('swipe-left');
-  const swipeRightEl = document.getElementById('swipe-right');
+  const swipeLeftEl = document.getElementById("swipe-left");
+  const swipeRightEl = document.getElementById("swipe-right");
 
   function flushScroll() {
     const lines = Math.trunc(scrollAccumulator / PX_PER_LINE);
@@ -194,144 +205,201 @@ function setupTouchGestures(container, term, sendKeysFn) {
     momentumRafId = requestAnimationFrame(tick);
   }
 
-  container.addEventListener('touchstart', (e) => {
-    if (e.touches.length === 2) {
-      pinchStartDist = getTouchDistance(e.touches);
-      pinchStartFontSize = term.options.fontSize;
-      touchStartY = null;
-      gestureDirection = null;
-      e.preventDefault();
-      e.stopPropagation();
-      return;
-    }
-    if (e.touches.length === 1) {
-      cancelMomentum();
-      cancelScrollFlush();
-      touchStartY = e.touches[0].clientY;
-      touchStartX = e.touches[0].clientX;
-      scrollAccumulator = 0;
-      gestureDirection = null;
-      velocitySamples = [{ delta: 0, time: Date.now() }];
-    }
-  }, { capture: true, passive: false });
-
-  container.addEventListener('touchmove', (e) => {
-    if (e.touches.length === 2 && pinchStartDist !== null) {
-      const dist = getTouchDistance(e.touches);
-      const scale = dist / pinchStartDist;
-      const newSize = Math.round(pinchStartFontSize * scale);
-      if (newSize !== term.options.fontSize && newSize >= 6 && newSize <= 32) {
-        container.dispatchEvent(new CustomEvent('pinch-zoom', { detail: { fontSize: newSize } }));
-      }
-      e.preventDefault();
-      e.stopPropagation();
-      return;
-    }
-
-    if (touchStartY === null || e.touches.length !== 1) return;
-
-    const currentY = e.touches[0].clientY;
-    const currentX = e.touches[0].clientX;
-    const deltaY = touchStartY - currentY;
-    const deltaX = currentX - touchStartX;
-
-    // Always claim the touch from the browser during direction detection
-    e.preventDefault();
-    e.stopPropagation();
-
-    if (gestureDirection === null) {
-      if (Math.abs(deltaY) > DIRECTION_LOCK_PX || Math.abs(deltaX) > DIRECTION_LOCK_PX) {
-        gestureDirection = Math.abs(deltaX) > Math.abs(deltaY) * 1.5 ? 'swipe' : 'scroll';
-      } else {
+  container.addEventListener(
+    "touchstart",
+    (e) => {
+      if (e.touches.length === 2) {
+        pinchStartDist = getTouchDistance(e.touches);
+        pinchStartFontSize = term.options.fontSize;
+        touchStartY = null;
+        gestureDirection = null;
+        e.preventDefault();
+        e.stopPropagation();
         return;
       }
-    }
+      if (e.touches.length === 1) {
+        cancelMomentum();
+        cancelScrollFlush();
+        touchStartY = e.touches[0].clientY;
+        touchStartX = e.touches[0].clientX;
+        scrollAccumulator = 0;
+        gestureDirection = null;
+        velocitySamples = [{ delta: 0, time: Date.now() }];
+        // Blur so the already-focused textarea can't re-trigger the
+        // keyboard during a gesture. Taps re-focus in touchend.
+        term.blur();
+        e.preventDefault();
+        e.stopPropagation();
+      }
+    },
+    { capture: true, passive: false },
+  );
 
-    if (gestureDirection === 'swipe') {
-      if (swipeLeftEl && swipeRightEl) {
-        if (deltaX > DIRECTION_LOCK_PX) {
-          swipeRightEl.classList.add('visible');
-          swipeLeftEl.classList.remove('visible');
-        } else if (deltaX < -DIRECTION_LOCK_PX) {
-          swipeLeftEl.classList.add('visible');
-          swipeRightEl.classList.remove('visible');
-        } else {
-          swipeLeftEl.classList.remove('visible');
-          swipeRightEl.classList.remove('visible');
+  container.addEventListener(
+    "touchmove",
+    (e) => {
+      if (e.touches.length === 2 && pinchStartDist !== null) {
+        const dist = getTouchDistance(e.touches);
+        const scale = dist / pinchStartDist;
+        const newSize = Math.round(pinchStartFontSize * scale);
+        if (
+          newSize !== term.options.fontSize &&
+          newSize >= 6 &&
+          newSize <= 32
+        ) {
+          container.dispatchEvent(
+            new CustomEvent("pinch-zoom", { detail: { fontSize: newSize } }),
+          );
         }
-      }
-      return;
-    }
-
-    if (gestureDirection === 'scroll') {
-      const delta = touchStartY - currentY;
-      touchStartY = currentY;
-      if (Math.abs(delta) < 1) return;
-
-      velocitySamples.push({ delta, time: Date.now() });
-      if (velocitySamples.length > VELOCITY_WINDOW + 1) {
-        velocitySamples.shift();
+        e.preventDefault();
+        e.stopPropagation();
+        return;
       }
 
-      scrollAccumulator += delta;
-      scheduleScrollFlush();
-    }
-  }, { capture: true, passive: false });
+      if (touchStartY === null || e.touches.length !== 1) return;
 
-  container.addEventListener('touchend', (e) => {
-    if (pinchStartDist !== null && e.touches.length < 2) {
-      pinchStartDist = null;
-      pinchStartFontSize = null;
+      const currentY = e.touches[0].clientY;
+      const currentX = e.touches[0].clientX;
+      const deltaY = touchStartY - currentY;
+      const deltaX = currentX - touchStartX;
+
+      // Always claim the touch from the browser during direction detection
       e.preventDefault();
       e.stopPropagation();
-      return;
-    }
 
-    if (gestureDirection === 'swipe' && touchStartX !== null) {
-      const endX = e.changedTouches[0]?.clientX ?? touchStartX;
-      const deltaX = endX - touchStartX;
-      if (Math.abs(deltaX) > window.innerWidth * SWIPE_THRESHOLD) {
-        container.dispatchEvent(new CustomEvent('swipe-session', {
-          detail: { direction: deltaX > 0 ? 'next' : 'prev' },
-        }));
+      if (gestureDirection === null) {
+        if (
+          Math.abs(deltaY) > DIRECTION_LOCK_PX ||
+          Math.abs(deltaX) > DIRECTION_LOCK_PX
+        ) {
+          gestureDirection =
+            Math.abs(deltaX) > Math.abs(deltaY) * 1.5 ? "swipe" : "scroll";
+        } else {
+          return;
+        }
       }
-    }
 
-    if (gestureDirection !== null) {
-      if (gestureDirection === 'scroll') {
-        cancelScrollFlush();
-        flushScroll();
-        startMomentum();
+      if (gestureDirection === "swipe") {
+        if (swipeLeftEl && swipeRightEl) {
+          if (deltaX > DIRECTION_LOCK_PX) {
+            swipeRightEl.classList.add("visible");
+            swipeLeftEl.classList.remove("visible");
+          } else if (deltaX < -DIRECTION_LOCK_PX) {
+            swipeLeftEl.classList.add("visible");
+            swipeRightEl.classList.remove("visible");
+          } else {
+            swipeLeftEl.classList.remove("visible");
+            swipeRightEl.classList.remove("visible");
+          }
+        }
+        return;
       }
-      e.preventDefault();
-    }
 
-    if (swipeLeftEl) swipeLeftEl.classList.remove('visible');
-    if (swipeRightEl) swipeRightEl.classList.remove('visible');
+      if (gestureDirection === "scroll") {
+        const delta = touchStartY - currentY;
+        touchStartY = currentY;
+        if (Math.abs(delta) < 1) return;
 
-    touchStartY = null;
-    touchStartX = null;
-    gestureDirection = null;
-    velocitySamples = [];
-  }, { capture: true, passive: false });
+        velocitySamples.push({ delta, time: Date.now() });
+        if (velocitySamples.length > VELOCITY_WINDOW + 1) {
+          velocitySamples.shift();
+        }
 
-  container.addEventListener('touchcancel', () => {
-    cancelMomentum();
-    cancelScrollFlush();
-    if (swipeLeftEl) swipeLeftEl.classList.remove('visible');
-    if (swipeRightEl) swipeRightEl.classList.remove('visible');
-    touchStartY = null;
-    touchStartX = null;
-    scrollAccumulator = 0;
-    gestureDirection = null;
-    velocitySamples = [];
-  }, { capture: true, passive: false });
+        scrollAccumulator += delta;
+        scheduleScrollFlush();
+      }
+    },
+    { capture: true, passive: false },
+  );
+
+  container.addEventListener(
+    "touchend",
+    (e) => {
+      if (pinchStartDist !== null && e.touches.length < 2) {
+        pinchStartDist = null;
+        pinchStartFontSize = null;
+        e.preventDefault();
+        e.stopPropagation();
+        return;
+      }
+
+      if (gestureDirection === "swipe" && touchStartX !== null) {
+        const endX = e.changedTouches[0]?.clientX ?? touchStartX;
+        const deltaX = endX - touchStartX;
+        if (Math.abs(deltaX) > window.innerWidth * SWIPE_THRESHOLD) {
+          container.dispatchEvent(
+            new CustomEvent("swipe-session", {
+              detail: { direction: deltaX > 0 ? "next" : "prev" },
+            }),
+          );
+        }
+      }
+
+      if (gestureDirection !== null) {
+        if (gestureDirection === "scroll") {
+          cancelScrollFlush();
+          flushScroll();
+          startMomentum();
+        }
+        e.preventDefault();
+      }
+
+      // Tap (no gesture detected) → synthesize mouse events so xterm
+      // handles focus/cursor and the click handler in main.js fires.
+      if (gestureDirection === null && touchStartX !== null) {
+        const touch = e.changedTouches[0];
+        if (touch) {
+          const target =
+            document.elementFromPoint(touch.clientX, touch.clientY) ||
+            container;
+          const mouseOpts = {
+            bubbles: true,
+            clientX: touch.clientX,
+            clientY: touch.clientY,
+            button: 0,
+          };
+          target.dispatchEvent(new MouseEvent("mousedown", mouseOpts));
+          target.dispatchEvent(new MouseEvent("mouseup", mouseOpts));
+          target.dispatchEvent(new MouseEvent("click", mouseOpts));
+        }
+      }
+
+      if (swipeLeftEl) swipeLeftEl.classList.remove("visible");
+      if (swipeRightEl) swipeRightEl.classList.remove("visible");
+
+      touchStartY = null;
+      touchStartX = null;
+      gestureDirection = null;
+      velocitySamples = [];
+    },
+    { capture: true, passive: false },
+  );
+
+  container.addEventListener(
+    "touchcancel",
+    () => {
+      cancelMomentum();
+      cancelScrollFlush();
+      if (swipeLeftEl) swipeLeftEl.classList.remove("visible");
+      if (swipeRightEl) swipeRightEl.classList.remove("visible");
+      touchStartY = null;
+      touchStartX = null;
+      scrollAccumulator = 0;
+      gestureDirection = null;
+      velocitySamples = [];
+    },
+    { capture: true, passive: false },
+  );
 }
 
-export function createTerminal(container, { session, fontSize = 14, onDataTransform }) {
+export function createTerminal(
+  container,
+  { session, fontSize = 14, onDataTransform },
+) {
   const term = new Terminal({
     fontSize,
-    fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'Consolas', monospace",
+    fontFamily:
+      "'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'Consolas', monospace",
     theme: THEME,
     scrollback: 5000,
     cursorBlink: true,
@@ -349,9 +417,9 @@ export function createTerminal(container, { session, fontSize = 14, onDataTransf
   term.open(container);
 
   // Force mobile keyboard to lowercase mode
-  const helperTextarea = container.querySelector('.xterm-helper-textarea');
+  const helperTextarea = container.querySelector(".xterm-helper-textarea");
   if (helperTextarea) {
-    helperTextarea.setAttribute('autocapitalize', 'none');
+    helperTextarea.setAttribute("autocapitalize", "none");
   }
 
   patchSwiftKeyComposition(term);
@@ -377,30 +445,38 @@ export function createTerminal(container, { session, fontSize = 14, onDataTransf
       clearTimeout(reconnectTimer);
       reconnectTimer = null;
     }
-    const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${protocol}//${location.host}/ws?session=${encodeURIComponent(currentSession || '')}`;
+    const protocol = location.protocol === "https:" ? "wss:" : "ws:";
+    const wsUrl = `${protocol}//${location.host}/ws?session=${encodeURIComponent(currentSession || "")}`;
     ws = new WebSocket(wsUrl);
-    ws.binaryType = 'arraybuffer';
+    ws.binaryType = "arraybuffer";
 
-    ws.addEventListener('open', () => {
+    ws.addEventListener("open", () => {
       reconnectDelay = 1000;
-      wsSend(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
+      wsSend(
+        JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }),
+      );
     });
 
-    ws.addEventListener('message', (event) => {
-      const data = event.data instanceof ArrayBuffer
-        ? new Uint8Array(event.data)
-        : event.data;
+    ws.addEventListener("message", (event) => {
+      const data =
+        event.data instanceof ArrayBuffer
+          ? new Uint8Array(event.data)
+          : event.data;
       term.write(data);
     });
 
-    ws.addEventListener('close', (event) => {
+    ws.addEventListener("close", (event) => {
       if (intentionalClose) return;
-      if (event.code === 1000 && event.reason === 'Replaced by new connection') {
-        term.write('\r\n\x1b[1;33m[Session taken by another connection]\x1b[0m\r\n');
+      if (
+        event.code === 1000 &&
+        event.reason === "Replaced by new connection"
+      ) {
+        term.write(
+          "\r\n\x1b[1;33m[Session taken by another connection]\x1b[0m\r\n",
+        );
         return;
       }
-      term.write('\r\n\x1b[1;33m[Reconnecting...]\x1b[0m\r\n');
+      term.write("\r\n\x1b[1;33m[Reconnecting...]\x1b[0m\r\n");
       scheduleReconnect();
     });
   }
@@ -416,8 +492,11 @@ export function createTerminal(container, { session, fontSize = 14, onDataTransf
 
   connect();
 
-  document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible' && (!ws || ws.readyState !== WebSocket.OPEN)) {
+  document.addEventListener("visibilitychange", () => {
+    if (
+      document.visibilityState === "visible" &&
+      (!ws || ws.readyState !== WebSocket.OPEN)
+    ) {
       if (ws && ws.readyState !== WebSocket.CLOSED) ws.close();
       reconnectDelay = 1000;
       connect();
@@ -450,14 +529,17 @@ export function createTerminal(container, { session, fontSize = 14, onDataTransf
   resizeObserver.observe(container);
 
   term.onResize(({ cols, rows }) => {
-    wsSend(JSON.stringify({ type: 'resize', cols, rows }));
+    wsSend(JSON.stringify({ type: "resize", cols, rows }));
   });
 
   // --- Touch gestures ---
-  function sendKeys(seq) { wsSend(seq); }
+  function sendKeys(seq) {
+    wsSend(seq);
+  }
   setupTouchGestures(container, term, sendKeys);
 
   function setFontSize(size) {
+    // xterm API requires direct property mutation
     term.options.fontSize = size;
     lastCols = 0;
     lastRows = 0;
@@ -466,23 +548,35 @@ export function createTerminal(container, { session, fontSize = 14, onDataTransf
 
   function switchWindow(targetSession, windowIndex) {
     currentSession = targetSession;
-    wsSend(JSON.stringify({ type: 'switch', session: targetSession, window: windowIndex }));
+    wsSend(
+      JSON.stringify({
+        type: "switch",
+        session: targetSession,
+        window: windowIndex,
+      }),
+    );
   }
 
   function newWindow(targetSession) {
-    wsSend(JSON.stringify({ type: 'new-window', session: targetSession }));
+    wsSend(JSON.stringify({ type: "new-window", session: targetSession }));
   }
 
   function newSession(name) {
-    wsSend(JSON.stringify({ type: 'new-session', name }));
+    wsSend(JSON.stringify({ type: "new-session", name }));
   }
 
   function killSession(name) {
-    wsSend(JSON.stringify({ type: 'kill-session', name }));
+    wsSend(JSON.stringify({ type: "kill-session", name }));
   }
 
   function killWindow(sessionName, windowIndex) {
-    wsSend(JSON.stringify({ type: 'kill-window', session: sessionName, window: windowIndex }));
+    wsSend(
+      JSON.stringify({
+        type: "kill-window",
+        session: sessionName,
+        window: windowIndex,
+      }),
+    );
   }
 
   function dispose() {
@@ -494,8 +588,16 @@ export function createTerminal(container, { session, fontSize = 14, onDataTransf
   }
 
   return {
-    term, searchAddon, setFontSize, sendKeys, switchWindow,
-    newWindow, newSession, killSession, killWindow, dispose,
+    term,
+    searchAddon,
+    setFontSize,
+    sendKeys,
+    switchWindow,
+    newWindow,
+    newSession,
+    killSession,
+    killWindow,
+    dispose,
     fit: debouncedFit,
   };
 }
