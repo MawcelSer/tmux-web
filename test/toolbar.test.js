@@ -27,6 +27,10 @@ describe('KEYS mapping', () => {
     expect(KEYS['END']).toBe('\x1b[F');
   });
 
+  it('has ↵ as \\r', () => {
+    expect(KEYS['↵']).toBe('\r');
+  });
+
   it('has special characters as literals', () => {
     expect(KEYS['-']).toBe('-');
     expect(KEYS['/']).toBe('/');

@@ -15,6 +15,7 @@ export const KEYS = {
   'PGDN': '\x1b[6~',
   'HOME': '\x1b[H',
   'END': '\x1b[F',
+  '↵': '\r',
 };
 
 /** Keys that auto-repeat when held. */
@@ -128,6 +129,7 @@ export function createToolbar(container, { onKey, onIncrease, onDecrease }) {
   keyBtn(row2, '→', 'toolbar-btn-arrow');
   sep(row2);
   keyBtn(row2, 'PGDN', 'toolbar-btn-wide');
+  row2.appendChild(makeButton('ENTER ↵', () => onKey(KEYS['↵']), 'toolbar-btn-enter'));
 
   wrapper.appendChild(row1);
   wrapper.appendChild(row2);

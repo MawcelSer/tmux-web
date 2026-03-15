@@ -267,6 +267,13 @@ body {
   color: #fff;
 }
 
+.toolbar-btn-enter {
+  flex: 1;
+  font-size: 13px;
+  min-width: auto;
+  gap: 4px;
+}
+
 .toolbar-sep {
   width: 1px;
   height: 18px;
