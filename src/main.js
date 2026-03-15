@@ -4,8 +4,9 @@ import { createToolbar } from './toolbar.js';
 import { FontSizeManager } from './font-size.js';
 import { createSessionSwitcher } from './session-switcher.js';
 
+const LAST_SESSION_KEY = 'tmuxweb:lastSession';
 const urlParams = new URLSearchParams(location.search);
-const initialSession = urlParams.get('session') || '';
+const initialSession = urlParams.get('session') || localStorage.getItem(LAST_SESSION_KEY) || '';
 
 const fontMgr = new FontSizeManager();
 
@@ -42,6 +43,7 @@ function activateSession(name) {
   terminal.switchWindow(name, null);
   switcher.setCurrentSession(name);
   currentSessionIndex = sessionList.indexOf(name);
+  localStorage.setItem(LAST_SESSION_KEY, name);
 }
 
 async function refreshSessionList() {
@@ -55,8 +57,7 @@ async function refreshSessionList() {
       // No session selected yet — pick attached session or first available
       const attached = data.sessions.find((s) => s.attached);
       const target = attached ? attached.name : data.sessions[0].name;
-      switcher.setCurrentSession(target);
-      currentSessionIndex = sessionList.indexOf(target);
+      activateSession(target);
     }
   } catch (err) {
     console.error('refreshSessionList failed:', err);
@@ -76,6 +77,7 @@ const switcher = createSessionSwitcher({
       terminal.switchWindow(session, windowIndex);
       switcher.setCurrentSession(session);
       currentSessionIndex = sessionList.indexOf(session);
+      localStorage.setItem(LAST_SESSION_KEY, session);
     } else {
       activateSession(session);
     }
