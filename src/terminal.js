@@ -2,6 +2,8 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { SearchAddon } from "@xterm/addon-search";
+import { createConnection } from "./connection.js";
+import { setupTouchGestures } from "./touch-gestures.js";
 
 const THEME = {
   background: "#101b2c",
@@ -104,297 +106,19 @@ function patchSwiftKeyComposition(term) {
   };
 }
 
-function getTouchDistance(touches) {
-  const dx = touches[0].clientX - touches[1].clientX;
-  const dy = touches[0].clientY - touches[1].clientY;
-  return Math.sqrt(dx * dx + dy * dy);
-}
+const NOTICES = {
+  reconnecting: "\r\n\x1b[1;33m[Reconnecting...]\x1b[0m\r\n",
+  taken: "\r\n\x1b[1;33m[Session taken by another connection]\x1b[0m\r\n",
+};
 
-/**
- * Set up touch gestures: scroll, swipe, pinch.
- * Taps are re-synthesized as mouse events; gestures suppress focus/keyboard.
- */
-function setupTouchGestures(container, term, sendKeysFn) {
-  let touchStartY = null;
-  let touchStartX = null;
-  let scrollAccumulator = 0;
-  let gestureDirection = null; // null | 'scroll' | 'swipe'
-  const PX_PER_LINE = 14;
-  const SWIPE_THRESHOLD = 0.4;
-  const DIRECTION_LOCK_PX = 10;
-
-  let pinchStartDist = null;
-  let pinchStartFontSize = null;
-
-  // RAF-based scroll flush (replaces throttle + drain timer)
-  let scrollRafId = null;
-
-  // Momentum state
-  const FRICTION = 0.94;
-  const MIN_VELOCITY = 0.3;
-  const VELOCITY_WINDOW = 4;
-  let velocitySamples = [];
-  let momentumRafId = null;
-  let momentumVelocity = 0;
-
-  const swipeLeftEl = document.getElementById("swipe-left");
-  const swipeRightEl = document.getElementById("swipe-right");
-
-  function flushScroll() {
-    const lines = Math.trunc(scrollAccumulator / PX_PER_LINE);
-    if (lines === 0) return;
-    scrollAccumulator -= lines * PX_PER_LINE;
-    const button = lines > 0 ? 65 : 64;
-    sendKeysFn(`\x1b[<${button};1;1M`.repeat(Math.abs(lines)));
-  }
-
-  function scheduleScrollFlush() {
-    if (scrollRafId === null) {
-      scrollRafId = requestAnimationFrame(() => {
-        scrollRafId = null;
-        flushScroll();
-      });
-    }
-  }
-
-  function cancelScrollFlush() {
-    if (scrollRafId !== null) {
-      cancelAnimationFrame(scrollRafId);
-      scrollRafId = null;
-    }
-  }
-
-  function cancelMomentum() {
-    if (momentumRafId !== null) {
-      cancelAnimationFrame(momentumRafId);
-      momentumRafId = null;
-    }
-    momentumVelocity = 0;
-  }
-
-  function computeReleaseVelocity() {
-    if (velocitySamples.length < 2) return 0;
-    const recent = velocitySamples.slice(-VELOCITY_WINDOW);
-    let totalDelta = 0;
-    let totalTime = 0;
-    for (let i = 1; i < recent.length; i++) {
-      totalDelta += recent[i].delta;
-      totalTime += recent[i].time - recent[i - 1].time;
-    }
-    if (totalTime === 0) return 0;
-    return totalDelta / totalTime; // px per ms
-  }
-
-  function startMomentum() {
-    const velocity = computeReleaseVelocity();
-    // Convert px/ms to px/frame (~16ms)
-    momentumVelocity = velocity * 16;
-    if (Math.abs(momentumVelocity) < MIN_VELOCITY) return;
-
-    function tick() {
-      momentumVelocity *= FRICTION;
-      if (Math.abs(momentumVelocity) < MIN_VELOCITY) {
-        momentumRafId = null;
-        flushScroll();
-        return;
-      }
-      scrollAccumulator += momentumVelocity;
-      flushScroll();
-      momentumRafId = requestAnimationFrame(tick);
-    }
-    momentumRafId = requestAnimationFrame(tick);
-  }
-
-  container.addEventListener(
-    "touchstart",
-    (e) => {
-      if (e.touches.length === 2) {
-        pinchStartDist = getTouchDistance(e.touches);
-        pinchStartFontSize = term.options.fontSize;
-        touchStartY = null;
-        gestureDirection = null;
-        e.preventDefault();
-        e.stopPropagation();
-        return;
-      }
-      if (e.touches.length === 1) {
-        cancelMomentum();
-        cancelScrollFlush();
-        touchStartY = e.touches[0].clientY;
-        touchStartX = e.touches[0].clientX;
-        scrollAccumulator = 0;
-        gestureDirection = null;
-        velocitySamples = [{ delta: 0, time: Date.now() }];
-        // Blur so the already-focused textarea can't re-trigger the
-        // keyboard during a gesture. Taps re-focus in touchend.
-        term.blur();
-        e.preventDefault();
-        e.stopPropagation();
-      }
-    },
-    { capture: true, passive: false },
-  );
-
-  container.addEventListener(
-    "touchmove",
-    (e) => {
-      if (e.touches.length === 2 && pinchStartDist !== null) {
-        const dist = getTouchDistance(e.touches);
-        const scale = dist / pinchStartDist;
-        const newSize = Math.round(pinchStartFontSize * scale);
-        if (
-          newSize !== term.options.fontSize &&
-          newSize >= 6 &&
-          newSize <= 32
-        ) {
-          container.dispatchEvent(
-            new CustomEvent("pinch-zoom", { detail: { fontSize: newSize } }),
-          );
-        }
-        e.preventDefault();
-        e.stopPropagation();
-        return;
-      }
-
-      if (touchStartY === null || e.touches.length !== 1) return;
-
-      const currentY = e.touches[0].clientY;
-      const currentX = e.touches[0].clientX;
-      const deltaY = touchStartY - currentY;
-      const deltaX = currentX - touchStartX;
-
-      // Always claim the touch from the browser during direction detection
-      e.preventDefault();
-      e.stopPropagation();
-
-      if (gestureDirection === null) {
-        if (
-          Math.abs(deltaY) > DIRECTION_LOCK_PX ||
-          Math.abs(deltaX) > DIRECTION_LOCK_PX
-        ) {
-          gestureDirection =
-            Math.abs(deltaX) > Math.abs(deltaY) * 1.5 ? "swipe" : "scroll";
-        } else {
-          return;
-        }
-      }
-
-      if (gestureDirection === "swipe") {
-        if (swipeLeftEl && swipeRightEl) {
-          if (deltaX > DIRECTION_LOCK_PX) {
-            swipeRightEl.classList.add("visible");
-            swipeLeftEl.classList.remove("visible");
-          } else if (deltaX < -DIRECTION_LOCK_PX) {
-            swipeLeftEl.classList.add("visible");
-            swipeRightEl.classList.remove("visible");
-          } else {
-            swipeLeftEl.classList.remove("visible");
-            swipeRightEl.classList.remove("visible");
-          }
-        }
-        return;
-      }
-
-      if (gestureDirection === "scroll") {
-        const delta = touchStartY - currentY;
-        touchStartY = currentY;
-        if (Math.abs(delta) < 1) return;
-
-        velocitySamples.push({ delta, time: Date.now() });
-        if (velocitySamples.length > VELOCITY_WINDOW + 1) {
-          velocitySamples.shift();
-        }
-
-        scrollAccumulator += delta;
-        scheduleScrollFlush();
-      }
-    },
-    { capture: true, passive: false },
-  );
-
-  container.addEventListener(
-    "touchend",
-    (e) => {
-      if (pinchStartDist !== null && e.touches.length < 2) {
-        pinchStartDist = null;
-        pinchStartFontSize = null;
-        e.preventDefault();
-        e.stopPropagation();
-        return;
-      }
-
-      if (gestureDirection === "swipe" && touchStartX !== null) {
-        const endX = e.changedTouches[0]?.clientX ?? touchStartX;
-        const deltaX = endX - touchStartX;
-        if (Math.abs(deltaX) > window.innerWidth * SWIPE_THRESHOLD) {
-          container.dispatchEvent(
-            new CustomEvent("swipe-session", {
-              detail: { direction: deltaX > 0 ? "next" : "prev" },
-            }),
-          );
-        }
-      }
-
-      if (gestureDirection !== null) {
-        if (gestureDirection === "scroll") {
-          cancelScrollFlush();
-          flushScroll();
-          startMomentum();
-        }
-        e.preventDefault();
-      }
-
-      // Tap (no gesture detected) → synthesize mouse events so xterm
-      // handles focus/cursor and the click handler in main.js fires.
-      if (gestureDirection === null && touchStartX !== null) {
-        const touch = e.changedTouches[0];
-        if (touch) {
-          const target =
-            document.elementFromPoint(touch.clientX, touch.clientY) ||
-            container;
-          const mouseOpts = {
-            bubbles: true,
-            clientX: touch.clientX,
-            clientY: touch.clientY,
-            button: 0,
-          };
-          target.dispatchEvent(new MouseEvent("mousedown", mouseOpts));
-          target.dispatchEvent(new MouseEvent("mouseup", mouseOpts));
-          target.dispatchEvent(new MouseEvent("click", mouseOpts));
-        }
-      }
-
-      if (swipeLeftEl) swipeLeftEl.classList.remove("visible");
-      if (swipeRightEl) swipeRightEl.classList.remove("visible");
-
-      touchStartY = null;
-      touchStartX = null;
-      gestureDirection = null;
-      velocitySamples = [];
-    },
-    { capture: true, passive: false },
-  );
-
-  container.addEventListener(
-    "touchcancel",
-    () => {
-      cancelMomentum();
-      cancelScrollFlush();
-      if (swipeLeftEl) swipeLeftEl.classList.remove("visible");
-      if (swipeRightEl) swipeRightEl.classList.remove("visible");
-      touchStartY = null;
-      touchStartX = null;
-      scrollAccumulator = 0;
-      gestureDirection = null;
-      velocitySamples = [];
-    },
-    { capture: true, passive: false },
-  );
+function buildWsUrl(session) {
+  const protocol = location.protocol === "https:" ? "wss:" : "ws:";
+  return `${protocol}//${location.host}/ws?session=${encodeURIComponent(session || "")}`;
 }
 
 export function createTerminal(
   container,
-  { session, fontSize = 14, onDataTransform },
+  { session, fontSize = 14, onDataTransform, beforeReconnect },
 ) {
   const term = new Terminal({
     fontSize,
@@ -427,84 +151,23 @@ export function createTerminal(
   requestAnimationFrame(() => fitAddon.fit());
 
   // --- WebSocket with auto-reconnect ---
-  let ws = null;
-  let currentSession = session;
-  let reconnectTimer = null;
-  let reconnectDelay = 1000;
-  const MAX_RECONNECT_DELAY = 30000;
-  let intentionalClose = false;
-
-  function wsSend(data) {
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(data);
-    }
-  }
-
-  function connect() {
-    if (reconnectTimer) {
-      clearTimeout(reconnectTimer);
-      reconnectTimer = null;
-    }
-    const protocol = location.protocol === "https:" ? "wss:" : "ws:";
-    const wsUrl = `${protocol}//${location.host}/ws?session=${encodeURIComponent(currentSession || "")}`;
-    ws = new WebSocket(wsUrl);
-    ws.binaryType = "arraybuffer";
-
-    ws.addEventListener("open", () => {
-      reconnectDelay = 1000;
-      wsSend(
-        JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }),
-      );
-    });
-
-    ws.addEventListener("message", (event) => {
-      const data =
-        event.data instanceof ArrayBuffer
-          ? new Uint8Array(event.data)
-          : event.data;
-      term.write(data);
-    });
-
-    ws.addEventListener("close", (event) => {
-      if (intentionalClose) return;
-      if (
-        event.code === 1000 &&
-        event.reason === "Replaced by new connection"
-      ) {
-        term.write(
-          "\r\n\x1b[1;33m[Session taken by another connection]\x1b[0m\r\n",
-        );
-        return;
-      }
-      term.write("\r\n\x1b[1;33m[Reconnecting...]\x1b[0m\r\n");
-      scheduleReconnect();
-    });
-  }
-
-  function scheduleReconnect() {
-    if (reconnectTimer) return;
-    reconnectTimer = setTimeout(() => {
-      reconnectTimer = null;
-      connect();
-      reconnectDelay = Math.min(reconnectDelay * 2, MAX_RECONNECT_DELAY);
-    }, reconnectDelay);
-  }
-
-  connect();
-
-  document.addEventListener("visibilitychange", () => {
-    if (
-      document.visibilityState === "visible" &&
-      (!ws || ws.readyState !== WebSocket.OPEN)
-    ) {
-      if (ws && ws.readyState !== WebSocket.CLOSED) ws.close();
-      reconnectDelay = 1000;
-      connect();
-    }
+  const connection = createConnection({
+    session,
+    buildUrl: buildWsUrl,
+    getSize: () => ({ cols: term.cols, rows: term.rows }),
+    onOutput: (data) => term.write(data),
+    onNotice: (kind) => term.write(NOTICES[kind]),
+    beforeReconnect,
   });
+  connection.connect();
+
+  function onVisibilityChange() {
+    if (document.visibilityState === "visible") connection.checkAlive();
+  }
+  document.addEventListener("visibilitychange", onVisibilityChange);
 
   term.onData((data) => {
-    wsSend(onDataTransform ? onDataTransform(data) : data);
+    connection.send(onDataTransform ? onDataTransform(data) : data);
   });
 
   // --- Resize handling ---
@@ -529,13 +192,11 @@ export function createTerminal(
   resizeObserver.observe(container);
 
   term.onResize(({ cols, rows }) => {
-    wsSend(JSON.stringify({ type: "resize", cols, rows }));
+    connection.sendJson({ type: "resize", cols, rows });
   });
 
   // --- Touch gestures ---
-  function sendKeys(seq) {
-    wsSend(seq);
-  }
+  const sendKeys = (seq) => connection.send(seq);
   setupTouchGestures(container, term, sendKeys);
 
   function setFontSize(size) {
@@ -546,44 +207,10 @@ export function createTerminal(
     fitAddon.fit();
   }
 
-  function switchWindow(targetSession, windowIndex) {
-    currentSession = targetSession;
-    wsSend(
-      JSON.stringify({
-        type: "switch",
-        session: targetSession,
-        window: windowIndex,
-      }),
-    );
-  }
-
-  function newWindow(targetSession) {
-    wsSend(JSON.stringify({ type: "new-window", session: targetSession }));
-  }
-
-  function newSession(name) {
-    wsSend(JSON.stringify({ type: "new-session", name }));
-  }
-
-  function killSession(name) {
-    wsSend(JSON.stringify({ type: "kill-session", name }));
-  }
-
-  function killWindow(sessionName, windowIndex) {
-    wsSend(
-      JSON.stringify({
-        type: "kill-window",
-        session: sessionName,
-        window: windowIndex,
-      }),
-    );
-  }
-
   function dispose() {
-    intentionalClose = true;
-    if (reconnectTimer) clearTimeout(reconnectTimer);
+    document.removeEventListener("visibilitychange", onVisibilityChange);
     resizeObserver.disconnect();
-    if (ws) ws.close();
+    connection.dispose();
     term.dispose();
   }
 
@@ -592,11 +219,18 @@ export function createTerminal(
     searchAddon,
     setFontSize,
     sendKeys,
-    switchWindow,
-    newWindow,
-    newSession,
-    killSession,
-    killWindow,
+    switchWindow: (targetSession, windowIndex) =>
+      connection.switchSession(targetSession, windowIndex),
+    newWindow: (targetSession) =>
+      connection.sendJson({ type: "new-window", session: targetSession }),
+    newSession: (name) => connection.sendJson({ type: "new-session", name }),
+    killSession: (name) => connection.sendJson({ type: "kill-session", name }),
+    killWindow: (sessionName, windowIndex) =>
+      connection.sendJson({
+        type: "kill-window",
+        session: sessionName,
+        window: windowIndex,
+      }),
     dispose,
     fit: debouncedFit,
   };

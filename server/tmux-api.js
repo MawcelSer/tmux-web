@@ -79,3 +79,19 @@ export function listWindows(session, execFileFn = defaultExecFile) {
     );
   });
 }
+
+/**
+ * Run a tmux command. Resolves with stdout, rejects with tmux's stderr
+ * message so callers can log or retry.
+ */
+export function runTmux(args, execFileFn = defaultExecFile) {
+  return new Promise((resolve, reject) => {
+    execFileFn("tmux", args, (err, stdout, stderr) => {
+      if (err) {
+        reject(new Error((stderr || err.message).trim()));
+        return;
+      }
+      resolve(stdout);
+    });
+  });
+}

@@ -46,14 +46,19 @@ tmuxweb/
 ├── vitest.config.js
 ├── server/
 │   ├── index.js            # entry point — starts HTTP+WS server
-│   ├── ws-server.js        # creates HTTP server, mounts WS + REST
+│   ├── ws-server.js        # WS handler, heartbeat, switch-client retry
+│   ├── http-routes.js      # REST + static files, error mapping
+│   ├── validation.js       # name / window / size validation
 │   ├── pty-manager.js      # spawn / write / resize / kill PTY
 │   ├── pty-bridge.py       # Python PTY helper (allocates real PTY)
 │   └── tmux-api.js         # exec tmux commands, parse output
 ├── src/
 │   ├── index.html
 │   ├── main.js
-│   ├── terminal.js         # xterm.js init + WS wiring
+│   ├── terminal.js         # xterm.js init + resize + SwiftKey patch
+│   ├── connection.js       # WS reconnect, liveness ping, queued switches
+│   ├── touch-gestures.js   # scroll / swipe / pinch / tap
+│   ├── session-picker.js   # fallback for dead sessions
 │   ├── toolbar.js          # mobile key toolbar
 │   ├── session-switcher.js # session/window panel
 │   ├── font-size.js        # font size A-/A+ with localStorage
@@ -63,6 +68,10 @@ tmuxweb/
     ├── pty-manager.test.js
     ├── ws-server.test.js
     ├── ws-validation.test.js
+    ├── ws-robustness.test.js
+    ├── connection.test.js
+    ├── touch-gestures.test.js
+    ├── session-picker.test.js
     ├── session-switcher.test.js
     ├── font-size.test.js
     └── toolbar.test.js
@@ -118,6 +127,13 @@ tmuxweb/
 - [x] On PTY exit: closes WebSocket with reason
 - [x] Input validation on session names and window indices
 - [x] PTY output buffer capped at 1MB to prevent OOM
+- [x] Frames over 1MB rejected (`maxPayload`, close 1009)
+- [x] `switch` retried until the PTY tty is known and tmux has registered the client (no dropped switches right after connect)
+- [x] Dedup map re-keyed to the session a connection switched to
+- [x] `{"type":"ping"}` answered with a text `{"type":"pong"}` frame
+- [x] Server heartbeat terminates half-dead sockets (and their tmux clients)
+- [x] Malformed URLs / Host headers return 4xx instead of hanging the request
+- [x] WebSocket upgrades from foreign origins rejected with 403 (cross-site WebSocket hijacking); `ALLOWED_ORIGINS` env for proxies
 - [x] Sanitized error messages (no raw tmux output leaked)
 
 ### AC-5: Frontend — Terminal
@@ -133,6 +149,11 @@ tmuxweb/
 - [x] SwiftKey composition double-fire patched (prefix/suffix diff with 15ms debounce)
 - [x] Mobile keyboard starts in lowercase mode (`autocapitalize="none"`)
 - [x] Auto-reconnect with exponential backoff and visibility-change detection
+- [x] On becoming visible, an open socket is pinged; no pong within 3s → reconnect
+- [x] Events from replaced sockets are ignored (no duplicate output / bogus "taken" notice)
+- [x] Session switches requested while connecting are sent once the socket opens
+- [x] Before reconnecting, a killed/exited/stale session falls back to a live one
+- [x] Tapping to stop momentum scroll, or lifting fingers after a pinch, does not open the keyboard
 
 ### AC-6: Frontend — Mobile Toolbar
 
@@ -188,12 +209,16 @@ tmuxweb/
 3. Refactor if needed
 4. Commit at each green phase: `test → implement → commit`
 
-Test approach per layer (84 tests total):
+Test approach per layer:
 
 - **tmux-api.js**: Pure function tests with mocked stdout strings
 - **pty-manager.js**: Mock child_process, verify spawn args, lifecycle calls
 - **ws-server.js**: Spin up real server, connect with ws client, verify message flow
 - **ws-validation.js**: Input validation, method guards, resize bounds, error sanitization
+- **ws-robustness.js**: Malformed URLs/Host, maxPayload, ping/pong, heartbeat, switch-client retry and dedup re-keying
+- **connection.js**: Reconnect/backoff, stale-socket guards, queued switches, liveness check (fake WebSocket + fake timers)
+- **touch-gestures.js**: Tap vs scroll/momentum/pinch/swipe detection (jsdom + fake rAF)
+- **session-picker.js**: Pure fallback rules for missing sessions
 - **session-switcher.js**: DOM rendering, CRUD operations, XSS safety (jsdom)
 - **font-size.js**: Mock localStorage, verify persistence and bounds
 - **toolbar.js**: Verify key-to-escape-sequence mapping correctness

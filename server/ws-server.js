@@ -1,57 +1,33 @@
 import http from "node:http";
-import { readFile } from "node:fs/promises";
-import { join, extname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
-import { dirname } from "node:path";
 import { WebSocketServer } from "ws";
-import { execFile } from "node:child_process";
 import { createPty as defaultCreatePty } from "./pty-manager.js";
 import {
   listSessions as defaultListSessions,
   listWindows as defaultListWindows,
+  runTmux as defaultRunTmux,
 } from "./tmux-api.js";
+import { createHttpHandler, URL_BASE } from "./http-routes.js";
+import {
+  isValidName,
+  isValidWindowIndex,
+  isValidSize,
+  isAllowedOrigin,
+} from "./validation.js";
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const DIST_DIR = resolve(__dirname, "..", "dist");
-
-const MIME_TYPES = {
-  ".html": "text/html",
-  ".js": "text/javascript",
-  ".css": "text/css",
-  ".json": "application/json",
-  ".png": "image/png",
-  ".svg": "image/svg+xml",
-  ".ico": "image/x-icon",
-  ".woff2": "font/woff2",
-  ".woff": "font/woff",
-  ".ttf": "font/ttf",
-};
-
-const VALID_NAME_RE = /^[\w\-. ]+$/;
 const MAX_SEND_BUF_BYTES = 1024 * 1024; // 1 MB cap to prevent OOM
 const MAX_INPUT_BYTES = 65536; // 64 KB cap on incoming terminal input
+const MAX_PAYLOAD_BYTES = 1024 * 1024; // frames above this close with 1009
 const CLOSE_TIMEOUT_MS = 5000;
+const DEFAULT_HEARTBEAT_MS = 30000;
+// tmux registers the client a few ms after `tmux attach` starts, and the
+// bridge reports its tty asynchronously — retry instead of dropping switches.
+const SWITCH_RETRY_MS = 100;
+const SWITCH_MAX_ATTEMPTS = 10;
+const CLIENT_NOT_READY_RE = /can't find client/i;
 
-function isValidName(name) {
-  return (
-    typeof name === "string" && name.length > 0 && VALID_NAME_RE.test(name)
-  );
-}
+export const REPLACED_REASON = "Replaced by new connection";
 
-function isValidWindowIndex(idx) {
-  return Number.isInteger(idx) && idx >= 0;
-}
-
-function sendJson(res, status, data) {
-  res.writeHead(status, { "Content-Type": "application/json" });
-  res.end(JSON.stringify(data));
-}
-
-function tmuxExec(args) {
-  execFile("tmux", args, (err) => {
-    if (err) console.error("tmux command failed:", args[0], err.message);
-  });
-}
+const delay = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /**
  * Create and return the HTTP + WebSocket server.
@@ -62,85 +38,129 @@ export function createServer({
   listSessionsFn = defaultListSessions,
   listWindowsFn = defaultListWindows,
   createPtyFn = defaultCreatePty,
+  tmuxExecFn = defaultRunTmux,
+  heartbeatMs = DEFAULT_HEARTBEAT_MS,
+  allowedOrigins = [],
 } = {}) {
-  const httpServer = http.createServer(async (req, res) => {
-    const url = new URL(req.url, `http://${req.headers.host}`);
-    const pathname = url.pathname;
+  const httpServer = http.createServer(
+    createHttpHandler({ listSessionsFn, listWindowsFn }),
+  );
 
-    // REST API — GET only
-    if (pathname === "/api/sessions") {
-      if (req.method !== "GET") {
-        sendJson(res, 405, { error: "Method Not Allowed" });
+  const wss = new WebSocketServer({
+    server: httpServer,
+    path: "/ws",
+    maxPayload: MAX_PAYLOAD_BYTES,
+    verifyClient: ({ origin, req }, done) => {
+      if (isAllowedOrigin(origin, req, allowedOrigins)) {
+        done(true);
         return;
       }
-      const sessions = await listSessionsFn();
-      sendJson(res, 200, { sessions });
-      return;
-    }
-
-    const windowsMatch = pathname.match(/^\/api\/windows\/(.+)$/);
-    if (windowsMatch) {
-      if (req.method !== "GET") {
-        sendJson(res, 405, { error: "Method Not Allowed" });
-        return;
-      }
-      const session = decodeURIComponent(windowsMatch[1]);
-      try {
-        const windows = await listWindowsFn(session);
-        sendJson(res, 200, { windows });
-      } catch {
-        sendJson(res, 404, { error: "Session not found" });
-      }
-      return;
-    }
-
-    // Static files from dist/
-    let filePath = pathname === "/" ? "/index.html" : pathname;
-    const fullPath = resolve(join(DIST_DIR, filePath));
-
-    // Prevent path traversal
-    if (!fullPath.startsWith(DIST_DIR + "/") && fullPath !== DIST_DIR) {
-      sendJson(res, 403, { error: "Forbidden" });
-      return;
-    }
-
-    try {
-      const content = await readFile(fullPath);
-      const ext = extname(filePath);
-      const mime = MIME_TYPES[ext] || "application/octet-stream";
-      res.writeHead(200, { "Content-Type": mime });
-      res.end(content);
-    } catch {
-      sendJson(res, 404, { error: "Not found" });
-    }
+      console.error("Rejected WebSocket from origin:", origin);
+      done(false, 403, "Forbidden");
+    },
   });
 
-  const wss = new WebSocketServer({ server: httpServer, path: "/ws" });
+  // Dedup map: session name → the connection currently showing it.
+  // Used to kill stale bridges when the same client reconnects.
   const activeSessions = new Map();
 
-  wss.on("connection", (ws, req) => {
-    const url = new URL(req.url, `http://${req.headers.host}`);
-    const session = url.searchParams.get("session") || "";
-
-    // Kill old PTY bridge for the same session to prevent duplicate clients
-    if (session && activeSessions.has(session)) {
-      const old = activeSessions.get(session);
-      old.pty.kill();
-      if (old.ws.readyState <= 1)
-        old.ws.close(1000, "Replaced by new connection");
-      activeSessions.delete(session);
-    }
-
-    const pty = createPtyFn({
-      session,
-      cols: 80,
-      rows: 24,
+  function tmux(args) {
+    return tmuxExecFn(args).catch((err) => {
+      console.error("tmux command failed:", args[0], err.message);
     });
+  }
 
-    if (session) activeSessions.set(session, { ws, pty });
+  async function switchClient(conn, target) {
+    for (let attempt = 1; attempt <= SWITCH_MAX_ATTEMPTS; attempt++) {
+      if (conn.closed) return false;
+      const tty = conn.pty.getTty?.();
+      if (tty) {
+        try {
+          await tmuxExecFn(["switch-client", "-c", tty, "-t", target]);
+          return true;
+        } catch (err) {
+          // Only an unregistered client is transient; a missing target is not
+          if (!CLIENT_NOT_READY_RE.test(err.message)) {
+            console.error("switch-client failed:", target, err.message);
+            return false;
+          }
+          if (attempt === SWITCH_MAX_ATTEMPTS) {
+            console.error("switch-client failed:", target, err.message);
+            return false;
+          }
+        }
+      }
+      await delay(SWITCH_RETRY_MS);
+    }
+    console.error("switch-client skipped: PTY tty never became available");
+    return false;
+  }
 
-    // Coalesce PTY output using setImmediate with a byte cap to prevent OOM.
-    // Batches data from the same event loop tick into one WebSocket send.
+  function claimSession(conn, session) {
+    if (conn.session && activeSessions.get(conn.session) === conn) {
+      activeSessions.delete(conn.session);
+    }
+    conn.session = session;
+    if (session && !activeSessions.has(session)) {
+      activeSessions.set(session, conn);
+    }
+  }
+
+  function handleControl(conn, msg) {
+    switch (msg.type) {
+      case "ping":
+        conn.ws.send(JSON.stringify({ type: "pong" }));
+        return;
+      case "resize":
+        if (isValidSize(msg.cols, msg.rows))
+          conn.pty.resize(msg.cols, msg.rows);
+        return;
+      case "switch": {
+        if (!isValidName(msg.session)) return;
+        if (msg.window != null && !isValidWindowIndex(msg.window)) return;
+        const target =
+          msg.window != null ? `${msg.session}:${msg.window}` : msg.session;
+        // Serialize so rapid switches land in order despite retries
+        conn.switchQueue = conn.switchQueue
+          .then(() => switchClient(conn, target))
+          .then((ok) => {
+            if (ok && !conn.closed) claimSession(conn, msg.session);
+          });
+        return;
+      }
+      case "new-window":
+        if (isValidName(msg.session)) tmux(["new-window", "-t", msg.session]);
+        return;
+      case "new-session":
+        if (isValidName(msg.name)) tmux(["new-session", "-d", "-s", msg.name]);
+        return;
+      case "kill-session":
+        if (isValidName(msg.name)) tmux(["kill-session", "-t", msg.name]);
+        return;
+      case "kill-window":
+        if (isValidName(msg.session) && isValidWindowIndex(msg.window)) {
+          tmux(["kill-window", "-t", `${msg.session}:${msg.window}`]);
+        }
+        return;
+      default:
+      // Unknown control types are ignored — never forwarded to the terminal
+    }
+  }
+
+  function parseControl(str) {
+    // Fast path: only attempt JSON parse if message looks like a JSON object
+    if (str.charCodeAt(0) !== 123) return null;
+    try {
+      const parsed = JSON.parse(str);
+      return parsed && parsed.type ? parsed : null;
+    } catch {
+      return null; // Malformed JSON — treat as terminal input
+    }
+  }
+
+  function pipePtyOutput(conn) {
+    const { ws, pty } = conn;
+    // Coalesce PTY output from the same event loop tick into one send
     let sendBuf = [];
     let sendBufBytes = 0;
     let sendScheduled = false;
@@ -149,9 +169,9 @@ export function createServer({
       sendScheduled = false;
       if (sendBuf.length && ws.readyState === 1) {
         ws.send(Buffer.concat(sendBuf));
-        sendBuf = [];
-        sendBufBytes = 0;
       }
+      sendBuf = [];
+      sendBufBytes = 0;
     }
 
     pty.onData((data) => {
@@ -159,12 +179,10 @@ export function createServer({
       sendBuf.push(data);
       sendBufBytes += data.length;
       if (sendBufBytes > MAX_SEND_BUF_BYTES) {
-        console.error("Output buffer overflow for session:", session);
+        console.error("Output buffer overflow for session:", conn.session);
         sendBuf = [];
         sendBufBytes = 0;
-        if (ws.readyState === 1) {
-          ws.close(1011, "Output buffer overflow");
-        }
+        ws.close(1011, "Output buffer overflow");
         return;
       }
       if (!sendScheduled) {
@@ -172,98 +190,74 @@ export function createServer({
         setImmediate(flushSendBuf);
       }
     });
+  }
+
+  // Heartbeat: half-dead mobile sockets never fire 'close' on their own.
+  // Their tmux clients linger and pin the window to a stale size.
+  const awaitingPong = new Set();
+  const heartbeat = setInterval(() => {
+    for (const client of wss.clients) {
+      if (awaitingPong.has(client)) {
+        client.terminate();
+        continue;
+      }
+      awaitingPong.add(client);
+      client.ping();
+    }
+  }, heartbeatMs);
+  heartbeat.unref();
+
+  wss.on("connection", (ws, req) => {
+    const url = new URL(req.url, URL_BASE);
+    const session = url.searchParams.get("session") || "";
+
+    // Kill old PTY bridge for the same session to prevent duplicate clients
+    const old = session && activeSessions.get(session);
+    if (old) {
+      old.closed = true; // stop its pending switch retries right away
+      old.pty.kill();
+      if (old.ws.readyState <= 1) old.ws.close(1000, REPLACED_REASON);
+      activeSessions.delete(session);
+    }
+
+    const pty = createPtyFn({ session, cols: 80, rows: 24 });
+    const conn = {
+      ws,
+      pty,
+      session: "",
+      closed: false,
+      switchQueue: Promise.resolve(),
+    };
+    claimSession(conn, session);
+    pipePtyOutput(conn);
 
     pty.onExit(() => {
-      if (ws.readyState === 1) {
-        ws.close(1000, "PTY exited");
-      }
+      if (ws.readyState === 1) ws.close(1000, "PTY exited");
     });
+
+    ws.on("pong", () => awaitingPong.delete(ws));
 
     ws.on("message", (msg) => {
       const str = msg.toString();
-      // Fast path: only attempt JSON parse if message looks like JSON object
-      if (str.charCodeAt(0) === 123) {
-        // '{'
-        try {
-          const parsed = JSON.parse(str);
-          if (parsed.type === "resize") {
-            const { cols, rows } = parsed;
-            if (
-              Number.isInteger(cols) &&
-              Number.isInteger(rows) &&
-              cols > 0 &&
-              cols <= 500 &&
-              rows > 0 &&
-              rows <= 200
-            ) {
-              pty.resize(cols, rows);
-            }
-            return;
-          }
-          if (parsed.type === "switch") {
-            if (!isValidName(parsed.session)) return;
-            if (parsed.window != null && !isValidWindowIndex(parsed.window))
-              return;
-            const tty = pty.getTty();
-            if (!tty) {
-              console.error(
-                "switch-client skipped: PTY tty not yet available for session:",
-                session,
-              );
-              return;
-            }
-            const target =
-              parsed.window != null
-                ? `${parsed.session}:${parsed.window}`
-                : parsed.session;
-            tmuxExec(["switch-client", "-c", tty, "-t", target]);
-            return;
-          }
-          if (parsed.type === "new-window") {
-            if (!isValidName(parsed.session)) return;
-            tmuxExec(["new-window", "-t", parsed.session]);
-            return;
-          }
-          if (parsed.type === "new-session") {
-            if (!isValidName(parsed.name)) return;
-            tmuxExec(["new-session", "-d", "-s", parsed.name]);
-            return;
-          }
-          if (parsed.type === "kill-session") {
-            if (!isValidName(parsed.name)) return;
-            tmuxExec(["kill-session", "-t", parsed.name]);
-            return;
-          }
-          if (parsed.type === "kill-window") {
-            if (!isValidName(parsed.session)) return;
-            if (!isValidWindowIndex(parsed.window)) return;
-            tmuxExec([
-              "kill-window",
-              "-t",
-              `${parsed.session}:${parsed.window}`,
-            ]);
-            return;
-          }
-          // Any JSON with a 'type' field is a control message — never forward to terminal
-          if (parsed.type) return;
-        } catch {
-          // Malformed JSON, fall through to treat as terminal input
-        }
+      const control = parseControl(str);
+      if (control) {
+        handleControl(conn, control);
+        return;
       }
       if (str.length > MAX_INPUT_BYTES) return;
       pty.write(str);
     });
 
     ws.on("error", (err) => {
-      console.error("WebSocket error for session:", session, err.message);
+      console.error("WebSocket error for session:", conn.session, err.message);
     });
 
     ws.on("close", () => {
-      sendBuf = [];
-      sendBufBytes = 0;
+      conn.closed = true;
+      awaitingPong.delete(ws);
       pty.kill();
-      if (session && activeSessions.get(session)?.ws === ws) {
-        activeSessions.delete(session);
+      if (conn.session && activeSessions.get(conn.session) === conn) {
+        activeSessions.delete(conn.session);
       }
     });
   });
@@ -274,6 +268,7 @@ export function createServer({
     httpServer,
     wss,
     close() {
+      clearInterval(heartbeat);
       return new Promise((resolve) => {
         const timeout = setTimeout(resolve, CLOSE_TIMEOUT_MS);
         wss.clients.forEach((ws) => ws.terminate());

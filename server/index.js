@@ -2,7 +2,14 @@ import { createServer } from "./ws-server.js";
 
 const PORT = parseInt(process.env.PORT || "3000", 10);
 
-const server = createServer({ port: PORT });
+// Extra allowed WebSocket origins, comma-separated — needed when the app is
+// reached through a proxy that rewrites Host (e.g. https://box.tailnet.ts.net)
+const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || "")
+  .split(",")
+  .map((o) => o.trim())
+  .filter(Boolean);
+
+const server = createServer({ port: PORT, allowedOrigins: ALLOWED_ORIGINS });
 
 server.httpServer.on("listening", () => {
   const addr = server.httpServer.address();

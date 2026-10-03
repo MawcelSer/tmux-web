@@ -3,6 +3,7 @@ import { createTerminal } from "./terminal.js";
 import { createToolbar } from "./toolbar.js";
 import { FontSizeManager } from "./font-size.js";
 import { createSessionSwitcher } from "./session-switcher.js";
+import { pickSession } from "./session-picker.js";
 
 const LAST_SESSION_KEY = "tmuxweb:lastSession";
 const urlParams = new URLSearchParams(location.search);
@@ -26,6 +27,9 @@ const terminal = createTerminal(termContainer, {
     toolbar.clearModifiers();
     return applyModifiers(data, ctrl, alt);
   },
+  // Re-validate the session before every reconnect so a killed/exited
+  // session falls back to a live one instead of reconnecting forever.
+  beforeReconnect: refreshSessionList,
 });
 
 fontMgr.onChange((size) => terminal.setFontSize(size));
@@ -50,21 +54,15 @@ function activateSession(name) {
   localStorage.setItem(LAST_SESSION_KEY, name);
 }
 
-function activateFirstAvailableSession() {
-  if (sessionList.length > 0) activateSession(sessionList[0]);
-}
-
 async function refreshSessionList() {
   try {
     const res = await fetch("/api/sessions");
+    if (!res.ok) throw new Error(`GET /api/sessions returned ${res.status}`);
     const data = await res.json();
     sessionList = data.sessions.map((s) => s.name);
-    if (!switcher.getCurrentSession() && data.sessions.length > 0) {
-      // No session selected yet — pick attached session or first available
-      const attached = data.sessions.find((s) => s.attached);
-      const target = attached ? attached.name : data.sessions[0].name;
-      activateSession(target);
-    }
+    // Covers first load, a stale saved session, and the current one dying
+    const target = pickSession(data.sessions, switcher.getCurrentSession());
+    if (target) activateSession(target);
   } catch (err) {
     console.error("refreshSessionList failed:", err);
   }
@@ -99,12 +97,8 @@ const switcher = createSessionSwitcher({
   },
   onKillSession: (name, isCurrentSession) => {
     terminal.killSession(name);
-    if (isCurrentSession) {
-      pollUntil(
-        () => !sessionList.includes(name),
-        activateFirstAvailableSession,
-      );
-    }
+    // refreshSessionList() switches away once the session is gone
+    if (isCurrentSession) pollUntil(() => !sessionList.includes(name));
   },
   onKillWindow: (session, windowIndex) => {
     terminal.killWindow(session, windowIndex);
@@ -158,7 +152,12 @@ if (window.visualViewport) {
 }
 
 /** Retry refreshSessionList until condition is met, then run callback. */
-async function pollUntil(condition, onSuccess, retries = 5, delay = 200) {
+async function pollUntil(
+  condition,
+  onSuccess = () => {},
+  retries = 5,
+  delay = 200,
+) {
   for (let i = 0; i < retries; i++) {
     await new Promise((r) => setTimeout(r, delay));
     await refreshSessionList();

@@ -4,6 +4,7 @@ import {
   parseWindows,
   listSessions,
   listWindows,
+  runTmux,
 } from "../server/tmux-api.js";
 
 describe("parseSessions", () => {
@@ -166,6 +167,27 @@ describe("listWindows", () => {
     );
     await expect(listWindows("nope", execFileMock)).rejects.toThrow(
       "can't find session",
+    );
+  });
+});
+
+describe("runTmux", () => {
+  it("resolves with stdout", async () => {
+    const execFileMock = vi.fn((file, args, cb) => cb(null, "ok\n", ""));
+    await expect(runTmux(["new-window"], execFileMock)).resolves.toBe("ok\n");
+    expect(execFileMock).toHaveBeenCalledWith(
+      "tmux",
+      ["new-window"],
+      expect.any(Function),
+    );
+  });
+
+  it("rejects with trimmed stderr", async () => {
+    const execFileMock = vi.fn((file, args, cb) =>
+      cb(new Error("exit 1"), "", "can't find client\n"),
+    );
+    await expect(runTmux(["switch-client"], execFileMock)).rejects.toThrow(
+      /^can't find client$/,
     );
   });
 });

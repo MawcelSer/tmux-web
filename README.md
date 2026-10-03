@@ -55,6 +55,14 @@ Set the port with the `PORT` environment variable:
 PORT=8080 npm run dev
 ```
 
+WebSocket connections are only accepted from the page's own origin, so other
+websites open in your browser can't drive your shell. If you reach TmuxWeb
+through a proxy that rewrites the `Host` header, list its public origin(s):
+
+```bash
+ALLOWED_ORIGINS=https://box.tailnet.ts.net npm run dev
+```
+
 ## Touch Gestures
 
 | Gesture                   | Action                                                |
@@ -91,7 +99,10 @@ Connect to `ws://host:3000/ws?session=<name>`. Plain text messages are forwarded
 src/
   index.html          # Single-page shell
   main.js             # App entry — wires terminal, toolbar, switcher
-  terminal.js         # xterm.js setup, WebSocket, touch gestures, SwiftKey patch
+  terminal.js         # xterm.js setup, resize, SwiftKey patch
+  connection.js       # WebSocket: reconnect, liveness ping, queued switches
+  touch-gestures.js   # Scroll/momentum, swipe, pinch, tap synthesis
+  session-picker.js   # Fallback when the current session no longer exists
   toolbar.js          # Virtual key toolbar with modifier support
   session-switcher.js # Session/window panel UI with CRUD
   font-size.js        # Font size persistence (localStorage)
@@ -99,7 +110,9 @@ src/
   manifest.json       # PWA manifest
 server/
   index.js            # Server entry point
-  ws-server.js        # HTTP server, REST API, WebSocket handler
+  ws-server.js        # WebSocket handler, heartbeat, switch-client retry
+  http-routes.js      # REST API + static files, error mapping
+  validation.js       # Session name / window / size validation
   pty-manager.js      # PTY session lifecycle via Python bridge
   tmux-api.js         # tmux command interface and output parsing
   pty-bridge.py       # Python PTY bridge (allocates real PTY)
@@ -108,6 +121,10 @@ test/
   pty-manager.test.js # PTY lifecycle tests
   ws-server.test.js   # HTTP + WebSocket integration tests
   ws-validation.test.js # Input validation and security tests
+  ws-robustness.test.js # Malformed input, heartbeat, switch races
+  connection.test.js  # Reconnect, stale sockets, liveness (fake WebSocket)
+  touch-gestures.test.js # Tap vs gesture detection (jsdom)
+  session-picker.test.js # Session fallback rules
   session-switcher.test.js # Switcher UI and XSS safety tests
   font-size.test.js   # Font size persistence tests
   toolbar.test.js     # Key mapping tests
@@ -118,8 +135,10 @@ vitest.config.js      # Test configuration with coverage thresholds
 
 ```bash
 npm run dev          # Start dev server
-npm test             # Run tests (84 tests)
+npm test             # Run tests
 npm run test:watch   # Watch mode
+npm run test:coverage # Coverage report (80% thresholds)
+npm run format       # Prettier (also run by the Claude Code post-edit hook)
 ```
 
 ## License
