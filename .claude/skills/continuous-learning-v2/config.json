@@ -1,0 +1,10 @@
+{
+  "name": "continuous-learning-v2",
+  "version": "2.0.0",
+  "description": "Instinct-based learning with confidence scoring",
+  "min_session_length": 10,
+  "learned_skills_path": "~/.claude/learned-skills",
+  "confidence_threshold": 0.7,
+  "max_instincts": 100,
+  "auto_evolve_threshold": 20
+}

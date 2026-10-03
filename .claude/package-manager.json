@@ -1,0 +1,5 @@
+{
+  "packageManager": "npm",
+  "lockfile": "package-lock.json",
+  "source": "lockfile"
+}
