@@ -57,33 +57,33 @@ PORT=8080 npm run dev
 
 ## Touch Gestures
 
-| Gesture | Action |
-|---------|--------|
-| Tap | Focus terminal / open keyboard / close switcher panel |
-| Vertical drag | Scroll through tmux history |
-| Horizontal swipe | Switch to next/previous session |
-| Pinch | Zoom font size (6px–32px) |
-| Long-press session/window | Reveal kill button |
+| Gesture                   | Action                                                |
+| ------------------------- | ----------------------------------------------------- |
+| Tap                       | Focus terminal / open keyboard / close switcher panel |
+| Vertical drag             | Scroll through tmux history                           |
+| Horizontal swipe          | Switch to next/previous session                       |
+| Pinch                     | Zoom font size (6px–32px)                             |
+| Long-press session/window | Reveal kill button                                    |
 
 ## REST API
 
-| Endpoint | Description |
-|----------|-------------|
-| `GET /api/sessions` | List all tmux sessions |
+| Endpoint                    | Description                |
+| --------------------------- | -------------------------- |
+| `GET /api/sessions`         | List all tmux sessions     |
 | `GET /api/windows/:session` | List windows for a session |
 
 ## WebSocket Protocol
 
 Connect to `ws://host:3000/ws?session=<name>`. Plain text messages are forwarded to the PTY. JSON control messages:
 
-| Type | Fields | Description |
-|------|--------|-------------|
-| `resize` | `cols`, `rows` | Resize the terminal |
-| `switch` | `session`, `window?` | Switch tmux client to target |
-| `new-window` | `session` | Create a new window |
-| `new-session` | `name` | Create a new tmux session |
-| `kill-session` | `name` | Kill a tmux session |
-| `kill-window` | `session`, `window` | Kill a specific window |
+| Type           | Fields               | Description                  |
+| -------------- | -------------------- | ---------------------------- |
+| `resize`       | `cols`, `rows`       | Resize the terminal          |
+| `switch`       | `session`, `window?` | Switch tmux client to target |
+| `new-window`   | `session`            | Create a new window          |
+| `new-session`  | `name`               | Create a new tmux session    |
+| `kill-session` | `name`               | Kill a tmux session          |
+| `kill-window`  | `session`, `window`  | Kill a specific window       |
 
 ## Project Structure
 

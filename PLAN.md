@@ -1,6 +1,7 @@
 # TmuxWeb — Refined Implementation Plan
 
 ## Overview
+
 Mobile-first web client for controlling tmux sessions on a remote VPS via a browser.
 No authentication layer (Tailscale handles network security).
 
@@ -25,16 +26,16 @@ Node.js Server (port 3000)
 
 ## Stack
 
-| Layer              | Choice                                         |
-| ------------------ | ---------------------------------------------- |
-| Runtime            | Node.js 20+                                    |
-| PTY bridge         | Python pty module (via helper script)            |
-| WebSocket          | ws                                             |
-| HTTP               | Node built-in http                             |
-| Frontend terminal  | xterm.js 5 + fit + web-links + search addons   |
-| Bundler            | Vite                                           |
-| Styling            | Plain CSS (mobile-first)                       |
-| Test runner        | Vitest                                         |
+| Layer             | Choice                                       |
+| ----------------- | -------------------------------------------- |
+| Runtime           | Node.js 20+                                  |
+| PTY bridge        | Python pty module (via helper script)        |
+| WebSocket         | ws                                           |
+| HTTP              | Node built-in http                           |
+| Frontend terminal | xterm.js 5 + fit + web-links + search addons |
+| Bundler           | Vite                                         |
+| Styling           | Plain CSS (mobile-first)                     |
+| Test runner       | Vitest                                       |
 
 ## Directory Structure
 
@@ -70,6 +71,7 @@ tmuxweb/
 ## Acceptance Criteria
 
 ### AC-1: tmux API parsing
+
 - [x] `parseSessions(stdout)` correctly parses `tmux ls` output into `[{name, windows, created, attached}]`
 - [x] Returns empty array for "no server running" error output
 - [x] Handles sessions with spaces/special chars in names
@@ -79,6 +81,7 @@ tmuxweb/
 - [x] `listWindows(session)` execs `tmux list-windows -t <session>` and returns parsed result
 
 ### AC-2: PTY manager
+
 - [x] `createPty(sessionName, cols, rows)` spawns Python pty-bridge with `tmux attach -t <session>`
 - [x] Returns an object with `write(data)`, `resize(cols, rows)`, `kill()`, `onData(cb)`
 - [x] `kill()` destroys the child process cleanly
@@ -89,6 +92,7 @@ tmuxweb/
 - [x] Spawn errors logged to console
 
 ### AC-3: HTTP REST API
+
 - [x] `GET /api/sessions` returns JSON `{sessions: [...]}` with 200
 - [x] `GET /api/sessions` returns `{sessions: []}` when tmux has no sessions
 - [x] `GET /api/windows/:session` returns JSON `{windows: [...]}` with 200
@@ -99,6 +103,7 @@ tmuxweb/
 - [x] HTTP method guards (GET only, 405 for others)
 
 ### AC-4: WebSocket server
+
 - [x] Accepts connections on `ws://host:3000/ws?session=<name>`
 - [x] On connect: spawns PTY attached to the requested tmux session
 - [x] Forwards PTY stdout → WebSocket (binary)
@@ -116,6 +121,7 @@ tmuxweb/
 - [x] Sanitized error messages (no raw tmux output leaked)
 
 ### AC-5: Frontend — Terminal
+
 - [x] xterm.js terminal renders in the main area, filling available space
 - [x] xterm-addon-fit resizes terminal on window resize / orientation change
 - [x] xterm-addon-web-links makes URLs clickable
@@ -129,6 +135,7 @@ tmuxweb/
 - [x] Auto-reconnect with exponential backoff and visibility-change detection
 
 ### AC-6: Frontend — Mobile Toolbar
+
 - [x] Sticky bottom toolbar always visible above virtual keyboard
 - [x] Toolbar buttons: Ctrl, Alt modifiers, Esc, Tab, Arrow keys (←↑↓→), PgUp, PgDn
 - [x] Tapping a button sends the correct escape sequence to the terminal
@@ -137,6 +144,7 @@ tmuxweb/
 - [x] Buttons have adequate touch targets with haptic feedback
 
 ### AC-7: Frontend — Font Size
+
 - [x] Default font size: 14px
 - [x] A- decreases by 1px (minimum 8px)
 - [x] A+ increases by 1px (maximum 28px)
@@ -147,6 +155,7 @@ tmuxweb/
 - [x] onChange unsubscribe support
 
 ### AC-8: Frontend — Session/Window Switcher
+
 - [x] Top bar shows current session name
 - [x] Tapping "Sessions" opens a panel listing all tmux sessions
 - [x] Each session shows window count and attached status
@@ -162,6 +171,7 @@ tmuxweb/
 - [x] XSS-safe rendering (textContent, not innerHTML)
 
 ### AC-9: Responsive / Mobile-first Layout
+
 - [x] Layout works on 360px-wide screens (small Android phones)
 - [x] No horizontal scroll on mobile
 - [x] Terminal area uses all available vertical space between top bar and toolbar
@@ -179,6 +189,7 @@ tmuxweb/
 4. Commit at each green phase: `test → implement → commit`
 
 Test approach per layer (84 tests total):
+
 - **tmux-api.js**: Pure function tests with mocked stdout strings
 - **pty-manager.js**: Mock child_process, verify spawn args, lifecycle calls
 - **ws-server.js**: Spin up real server, connect with ws client, verify message flow

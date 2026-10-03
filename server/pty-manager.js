@@ -1,9 +1,9 @@
-import { spawn as defaultSpawn } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
-import { dirname, join } from 'node:path';
+import { spawn as defaultSpawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const BRIDGE_SCRIPT = join(__dirname, 'pty-bridge.py');
+const BRIDGE_SCRIPT = join(__dirname, "pty-bridge.py");
 
 export const RESIZE_PREFIX = Buffer.from([0x00, 0x52]); // \x00R
 
@@ -17,13 +17,18 @@ export const RESIZE_PREFIX = Buffer.from([0x00, 0x52]); // \x00R
  * @param {Function} [opts.spawnFn] - injectable spawn (for testing)
  * @returns {{ write, resize, kill, onData, onExit, getTty }}
  */
-export function createPty({ session = '', cols = 80, rows = 24, spawnFn = defaultSpawn }) {
+export function createPty({
+  session = "",
+  cols = 80,
+  rows = 24,
+  spawnFn = defaultSpawn,
+}) {
   const child = spawnFn(
-    'python3',
+    "python3",
     [BRIDGE_SCRIPT, session, String(cols), String(rows)],
     {
-      env: { ...process.env, TERM: 'xterm-256color' },
-      stdio: ['pipe', 'pipe', 'pipe'],
+      env: { ...process.env, TERM: "xterm-256color" },
+      stdio: ["pipe", "pipe", "pipe"],
     },
   );
 
@@ -31,23 +36,23 @@ export function createPty({ session = '', cols = 80, rows = 24, spawnFn = defaul
   const exitCallbacks = [];
   let clientTty = null;
 
-  child.stdout.on('data', (chunk) => {
+  child.stdout.on("data", (chunk) => {
     for (const cb of dataCallbacks) cb(chunk);
   });
 
   // Capture PTY slave path from stderr (format: "PTY:/dev/pts/X\n")
-  child.stderr.on('data', (chunk) => {
+  child.stderr.on("data", (chunk) => {
     const str = chunk.toString();
     const match = str.match(/^PTY:(.+)$/m);
     if (match) clientTty = match[1].trim();
   });
 
-  child.on('error', (err) => {
-    console.error('PTY bridge spawn error:', err.message);
+  child.on("error", (err) => {
+    console.error("PTY bridge spawn error:", err.message);
     for (const cb of exitCallbacks) cb(1);
   });
 
-  child.on('exit', (code) => {
+  child.on("exit", (code) => {
     for (const cb of exitCallbacks) cb(code);
   });
 

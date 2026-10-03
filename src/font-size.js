@@ -1,4 +1,4 @@
-export const STORAGE_KEY = 'tmuxweb:fontSize';
+export const STORAGE_KEY = "tmuxweb:fontSize";
 export const DEFAULT_SIZE = 14;
 export const MIN_SIZE = 8;
 export const MAX_SIZE = 28;

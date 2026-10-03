@@ -1,43 +1,54 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <meta name="mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <meta name="theme-color" content="#161b22">
-  <link rel="manifest" href="./manifest.json">
-  <title>TmuxWeb</title>
-  <link rel="stylesheet" href="./style.css">
-</head>
-<body autocapitalize="none" autocorrect="off" autocomplete="off" spellcheck="false">
-  <!-- Top bar -->
-  <header id="topbar">
-    <button id="btn-sessions" class="topbar-btn">Sessions</button>
-    <span id="current-session">—</span>
-    <button id="btn-windows" class="topbar-btn">Windows</button>
-  </header>
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"
+    />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta
+      name="apple-mobile-web-app-status-bar-style"
+      content="black-translucent"
+    />
+    <meta name="theme-color" content="#161b22" />
+    <link rel="manifest" href="./manifest.json" />
+    <title>TmuxWeb</title>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body
+    autocapitalize="none"
+    autocorrect="off"
+    autocomplete="off"
+    spellcheck="false"
+  >
+    <!-- Top bar -->
+    <header id="topbar">
+      <button id="btn-sessions" class="topbar-btn">Sessions</button>
+      <span id="current-session">—</span>
+      <button id="btn-windows" class="topbar-btn">Windows</button>
+    </header>
 
-  <!-- Session/Window switcher panel -->
-  <div id="switcher-panel" class="switcher-panel hidden">
-    <div class="switcher-header">
-      <span id="switcher-title">Sessions</span>
-      <button id="switcher-close" class="switcher-close">&times;</button>
+    <!-- Session/Window switcher panel -->
+    <div id="switcher-panel" class="switcher-panel hidden">
+      <div class="switcher-header">
+        <span id="switcher-title">Sessions</span>
+        <button id="switcher-close" class="switcher-close">&times;</button>
+      </div>
+      <ul id="switcher-list" class="switcher-list"></ul>
     </div>
-    <ul id="switcher-list" class="switcher-list"></ul>
-  </div>
 
-  <!-- Swipe arrow indicators -->
-  <div id="swipe-left" class="swipe-arrow swipe-arrow-left">&#x276E;</div>
-  <div id="swipe-right" class="swipe-arrow swipe-arrow-right">&#x276F;</div>
+    <!-- Swipe arrow indicators -->
+    <div id="swipe-left" class="swipe-arrow swipe-arrow-left">&#x276E;</div>
+    <div id="swipe-right" class="swipe-arrow swipe-arrow-right">&#x276F;</div>
 
-  <!-- Terminal area -->
-  <div id="terminal-container" autocapitalize="none"></div>
+    <!-- Terminal area -->
+    <div id="terminal-container" autocapitalize="none"></div>
 
-  <!-- Bottom toolbar -->
-  <div id="toolbar-container"></div>
+    <!-- Bottom toolbar -->
+    <div id="toolbar-container"></div>
 
-  <script type="module" src="./main.js"></script>
-</body>
+    <script type="module" src="./main.js"></script>
+  </body>
 </html>

@@ -20,16 +20,14 @@ afterEach(async () => {
 
 describe("REST API", () => {
   it("GET /api/sessions returns JSON with sessions array", async () => {
-    const mockListSessions = vi
-      .fn()
-      .mockResolvedValue([
-        {
-          name: "main",
-          windows: 2,
-          created: "Mon Jan  6 10:00:00 2025",
-          attached: true,
-        },
-      ]);
+    const mockListSessions = vi.fn().mockResolvedValue([
+      {
+        name: "main",
+        windows: 2,
+        created: "Mon Jan  6 10:00:00 2025",
+        attached: true,
+      },
+    ]);
     const base = await startServer({ listSessionsFn: mockListSessions });
     const res = await fetch(`${base}/api/sessions`);
     expect(res.status).toBe(200);
