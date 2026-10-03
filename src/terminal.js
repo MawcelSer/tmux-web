@@ -4,6 +4,7 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import { SearchAddon } from "@xterm/addon-search";
 import { createConnection } from "./connection.js";
 import { setupTouchGestures } from "./touch-gestures.js";
+import { setupMobileInput } from "./mobile-input.js";
 
 const THEME = {
   background: "#101b2c",
@@ -28,83 +29,6 @@ const THEME = {
   brightCyan: "#56d364",
   brightWhite: "#f0f6fc",
 };
-
-/**
- * Patch xterm's _handleAnyTextareaChanges to fix SwiftKey double-fire.
- * Tested with @xterm/xterm@5.5.0 — re-verify on every xterm upgrade.
- * See: https://github.com/xtermjs/xterm.js/issues/3600
- *
- * SwiftKey does delete-then-insert for punctuation after auto-space.
- * xterm's _handleAnyTextareaChanges uses newValue.replace(oldValue, '')
- * which fails when delete changes the sequence — replace() returns the
- * ENTIRE textarea as "new" data. Fix: debounce the burst into one diff
- * and use proper prefix/suffix comparison instead of String.replace().
- */
-function patchSwiftKeyComposition(term) {
-  const core = term._core;
-  const compHelper = core?._compositionHelper;
-
-  if (
-    !compHelper ||
-    typeof compHelper._handleAnyTextareaChanges !== "function" ||
-    !("_isComposing" in compHelper) ||
-    !("_coreService" in compHelper) ||
-    !("_textarea" in compHelper)
-  ) {
-    return;
-  }
-
-  let firstOldValue = null;
-  let pendingTimer = null;
-
-  compHelper._handleAnyTextareaChanges = function () {
-    if (firstOldValue === null) {
-      firstOldValue = this._textarea.value;
-    }
-    clearTimeout(pendingTimer);
-    pendingTimer = setTimeout(() => {
-      pendingTimer = null;
-      const oldValue = firstOldValue;
-      firstOldValue = null;
-
-      if (this._isComposing) return;
-      const newValue = this._textarea.value;
-      if (newValue === oldValue) return;
-
-      let prefixLen = 0;
-      const minLen = Math.min(oldValue.length, newValue.length);
-      while (
-        prefixLen < minLen &&
-        oldValue[prefixLen] === newValue[prefixLen]
-      ) {
-        prefixLen++;
-      }
-
-      let suffixLen = 0;
-      while (
-        suffixLen < minLen - prefixLen &&
-        oldValue[oldValue.length - 1 - suffixLen] ===
-          newValue[newValue.length - 1 - suffixLen]
-      ) {
-        suffixLen++;
-      }
-
-      const deleted = oldValue.substring(
-        prefixLen,
-        oldValue.length - suffixLen,
-      );
-      const added = newValue.substring(prefixLen, newValue.length - suffixLen);
-
-      for (let k = 0; k < deleted.length; k++) {
-        this._coreService.triggerDataEvent("\x7f", true);
-      }
-      if (added.length > 0) {
-        this._dataAlreadySent = added;
-        this._coreService.triggerDataEvent(added, true);
-      }
-    }, 15);
-  };
-}
 
 const NOTICES = {
   reconnecting: "\r\n\x1b[1;33m[Reconnecting...]\x1b[0m\r\n",
@@ -146,7 +70,7 @@ export function createTerminal(
     helperTextarea.setAttribute("autocapitalize", "none");
   }
 
-  patchSwiftKeyComposition(term);
+  const mobileInput = setupMobileInput(term);
 
   requestAnimationFrame(() => fitAddon.fit());
 
@@ -166,8 +90,13 @@ export function createTerminal(
   }
   document.addEventListener("visibilitychange", onVisibilityChange);
 
+  // Control input (Enter, Tab, arrows…) ends the current word/line, so put
+  // the keyboard back into lowercase mid-sentence context
+  const CONTROL_INPUT_RE = /[\x00-\x1f]/;
+
   term.onData((data) => {
     connection.send(onDataTransform ? onDataTransform(data) : data);
+    if (CONTROL_INPUT_RE.test(data)) mobileInput.resetContext();
   });
 
   // --- Resize handling ---
@@ -196,7 +125,10 @@ export function createTerminal(
   });
 
   // --- Touch gestures ---
-  const sendKeys = (seq) => connection.send(seq);
+  const sendKeys = (seq) => {
+    connection.send(seq);
+    mobileInput.resetContext();
+  };
   setupTouchGestures(container, term, sendKeys);
 
   function setFontSize(size) {

@@ -55,9 +55,10 @@ tmuxweb/
 ├── src/
 │   ├── index.html
 │   ├── main.js
-│   ├── terminal.js         # xterm.js init + resize + SwiftKey patch
+│   ├── terminal.js         # xterm.js init + resize
 │   ├── connection.js       # WS reconnect, liveness ping, queued switches
 │   ├── touch-gestures.js   # scroll / swipe / pinch / tap
+│   ├── mobile-input.js     # SwiftKey patch + lowercase keyboard context
 │   ├── session-picker.js   # fallback for dead sessions
 │   ├── toolbar.js          # mobile key toolbar
 │   ├── session-switcher.js # session/window panel
@@ -147,7 +148,7 @@ tmuxweb/
 - [x] Scrollback buffer: 5000 lines
 - [x] TERM=xterm-256color negotiated
 - [x] SwiftKey composition double-fire patched (prefix/suffix diff with 15ms debounce)
-- [x] Mobile keyboard starts in lowercase mode (`autocapitalize="none"`)
+- [x] Mobile keyboard starts in lowercase mode: xterm's textarea keeps a `", "` prefix before the cursor (SwiftKey ignores `autocapitalize` and capitalizes empty fields / after ". "), reset at word boundaries and after control keys, never mid-composition
 - [x] Auto-reconnect with exponential backoff and visibility-change detection
 - [x] On becoming visible, an open socket is pinged; no pong within 3s → reconnect
 - [x] Events from replaced sockets are ignored (no duplicate output / bogus "taken" notice)

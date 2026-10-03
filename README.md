@@ -12,7 +12,7 @@ A mobile-friendly web client for [tmux](https://github.com/tmux/tmux). Access yo
 - **Virtual toolbar** — Ctrl/Alt modifiers, arrow keys, Esc, Tab, and common shortcuts with haptic feedback
 - **Auto-reconnect** — WebSocket reconnects with exponential backoff and visibility-change detection
 - **SwiftKey compatibility** — patched xterm.js composition handler to fix character doubling on Android IME keyboards
-- **Lowercase keyboard** — mobile keyboard starts in lowercase mode via `autocapitalize="none"`
+- **Lowercase keyboard** — mobile keyboards (incl. SwiftKey, which ignores `autocapitalize`) start each command in lowercase: the hidden input keeps mid-sentence context (`", "`) before the cursor
 - **PWA-ready** — installable as a home screen app on mobile (manifest + meta tags)
 - **Responsive** — adapts to portrait, landscape, and narrow screens
 
@@ -99,9 +99,10 @@ Connect to `ws://host:3000/ws?session=<name>`. Plain text messages are forwarded
 src/
   index.html          # Single-page shell
   main.js             # App entry — wires terminal, toolbar, switcher
-  terminal.js         # xterm.js setup, resize, SwiftKey patch
+  terminal.js         # xterm.js setup, resize
   connection.js       # WebSocket: reconnect, liveness ping, queued switches
   touch-gestures.js   # Scroll/momentum, swipe, pinch, tap synthesis
+  mobile-input.js     # SwiftKey patch + lowercase keyboard context
   session-picker.js   # Fallback when the current session no longer exists
   toolbar.js          # Virtual key toolbar with modifier support
   session-switcher.js # Session/window panel UI with CRUD
@@ -124,6 +125,7 @@ test/
   ws-robustness.test.js # Malformed input, heartbeat, switch races
   connection.test.js  # Reconnect, stale sockets, liveness (fake WebSocket)
   touch-gestures.test.js # Tap vs gesture detection (jsdom)
+  mobile-input.test.js # IME diffing and keyboard context resets
   session-picker.test.js # Session fallback rules
   session-switcher.test.js # Switcher UI and XSS safety tests
   font-size.test.js   # Font size persistence tests
