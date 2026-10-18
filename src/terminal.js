@@ -90,13 +90,8 @@ export function createTerminal(
   }
   document.addEventListener("visibilitychange", onVisibilityChange);
 
-  // Control input (Enter, Tab, arrows…) ends the current word/line, so put
-  // the keyboard back into lowercase mid-sentence context
-  const CONTROL_INPUT_RE = /[\x00-\x1f]/;
-
   term.onData((data) => {
     connection.send(onDataTransform ? onDataTransform(data) : data);
-    if (CONTROL_INPUT_RE.test(data)) mobileInput.resetContext();
   });
 
   // --- Resize handling ---
@@ -125,7 +120,10 @@ export function createTerminal(
   });
 
   // --- Touch gestures ---
+  // Toolbar keys: send pending keyboard text first so ordering is kept,
+  // then start a fresh keyboard context (the key may move the cursor)
   const sendKeys = (seq) => {
+    mobileInput.flush();
     connection.send(seq);
     mobileInput.resetContext();
   };
