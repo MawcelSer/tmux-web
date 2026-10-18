@@ -391,3 +391,136 @@ body {
     font-size: 10px;
   }
 }
+
+/* === Touch selection (copy & paste) === */
+.selection-handle {
+  position: absolute;
+  width: 22px; /* HANDLE_SIZE_PX in touch-selection.js */
+  height: 22px;
+  background: #58a6ff;
+  border-radius: 0 50% 50% 50%;
+  pointer-events: none; /* hit-testing is done by the gesture handler */
+  z-index: 20;
+}
+
+.selection-handle-start {
+  border-radius: 50% 0 50% 50%;
+  transform: translateX(-100%);
+}
+
+.selection-bar {
+  position: fixed;
+  top: 44px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 2px;
+  padding: 3px;
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+  z-index: 30;
+}
+
+.selection-bar[hidden],
+.selection-toast[hidden] {
+  display: none;
+}
+
+.selection-bar-btn {
+  background: transparent;
+  color: #c9d1d9;
+  border: none;
+  border-radius: 5px;
+  padding: 0 14px;
+  height: 38px;
+  font-size: 14px;
+  touch-action: manipulation;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.selection-bar-btn:active {
+  background: #1f6feb;
+}
+
+.selection-bar-primary {
+  color: #58a6ff;
+  font-weight: 600;
+}
+
+.selection-bar-close {
+  color: #8b949e;
+  padding: 0 12px;
+}
+
+.selection-toast {
+  position: fixed;
+  bottom: 110px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 8px 16px;
+  background: #21262d;
+  color: #c9d1d9;
+  border: 1px solid #30363d;
+  border-radius: 16px;
+  font-size: 13px;
+  z-index: 30;
+  pointer-events: none;
+}
+
+.paste-box {
+  position: fixed;
+  top: 44px;
+  left: 8px;
+  right: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+  z-index: 40;
+}
+
+.paste-box-hint {
+  font-size: 12px;
+  color: #8b949e;
+}
+
+.paste-box-input {
+  width: 100%;
+  background: #0d1117;
+  color: #c9d1d9;
+  border: 1px solid #30363d;
+  border-radius: 4px;
+  padding: 6px;
+  font-family: "JetBrains Mono", "Fira Code", monospace;
+  font-size: 13px;
+  resize: vertical;
+}
+
+.paste-box-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.paste-box-btn {
+  background: #21262d;
+  color: #c9d1d9;
+  border: 1px solid #30363d;
+  border-radius: 4px;
+  padding: 0 16px;
+  height: 36px;
+  font-size: 13px;
+}
+
+.paste-box-send {
+  background: #1f6feb;
+  border-color: #58a6ff;
+  color: #fff;
+}

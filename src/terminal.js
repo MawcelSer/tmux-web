@@ -5,6 +5,7 @@ import { SearchAddon } from "@xterm/addon-search";
 import { createConnection } from "./connection.js";
 import { setupTouchGestures } from "./touch-gestures.js";
 import { setupMobileInput } from "./mobile-input.js";
+import { setupCopyPaste } from "./copy-paste.js";
 
 const THEME = {
   background: "#101b2c",
@@ -29,6 +30,9 @@ const THEME = {
   brightCyan: "#56d364",
   brightWhite: "#f0f6fc",
 };
+
+// Used until xterm has rendered (row height ≈ 14px font × 1.2)
+const FALLBACK_LINE_HEIGHT_PX = 17;
 
 const NOTICES = {
   reconnecting: "\r\n\x1b[1;33m[Reconnecting...]\x1b[0m\r\n",
@@ -127,7 +131,32 @@ export function createTerminal(
     connection.send(seq);
     mobileInput.resetContext();
   };
-  setupTouchGestures(container, term, sendKeys);
+  // Pasted text goes through xterm (bracketed paste), which clears the
+  // hidden textarea — restore the keyboard context afterwards
+  function paste(text) {
+    term.paste(text);
+    mobileInput.resetContext();
+  }
+
+  const selection = setupCopyPaste({
+    term,
+    container,
+    overlayHost: document.body,
+    paste,
+  });
+
+  // Touch scrolling: exact line counts, applied server-side via tmux copy
+  // mode (wheel events would scroll 5 lines at a time)
+  setupTouchGestures(container, term, {
+    selection,
+    onScroll: (lines) => connection.sendJson({ type: "scroll", lines }),
+    getLineHeight: () => {
+      const screen = term.element?.querySelector(".xterm-screen");
+      return screen && term.rows
+        ? screen.clientHeight / term.rows
+        : FALLBACK_LINE_HEIGHT_PX;
+    },
+  });
 
   function setFontSize(size) {
     // xterm API requires direct property mutation
@@ -149,6 +178,7 @@ export function createTerminal(
     searchAddon,
     setFontSize,
     sendKeys,
+    paste,
     switchWindow: (targetSession, windowIndex) =>
       connection.switchSession(targetSession, windowIndex),
     newWindow: (targetSession) =>

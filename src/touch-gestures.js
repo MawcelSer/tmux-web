@@ -1,3 +1,14 @@
+import { createKineticScroller } from "./kinetic-scroll.js";
+
+const NO_SELECTION = {
+  isActive: () => false,
+  startAt() {},
+  dragTo() {},
+  hitHandle: () => null,
+  grab() {},
+  clear() {},
+};
+
 function getTouchDistance(touches) {
   const dx = touches[0].clientX - touches[1].clientX;
   const dy = touches[0].clientY - touches[1].clientY;
@@ -5,105 +16,65 @@ function getTouchDistance(touches) {
 }
 
 /**
- * Set up touch gestures: scroll, swipe, pinch.
- * Taps are re-synthesized as mouse events; gestures suppress focus/keyboard.
+ * Set up touch gestures: scroll (with momentum), swipe, pinch, and
+ * long-press text selection. Taps are re-synthesized as mouse events;
+ * gestures suppress focus/keyboard.
+ *
+ * @param {HTMLElement} container
+ * @param {import("@xterm/xterm").Terminal} term
+ * @param {object} opts
+ * @param {(lines: number) => void} opts.onScroll - positive = newer output
+ * @param {() => number} opts.getLineHeight - px per terminal row
+ * @param {object} [opts.selection] - touch selection (see touch-selection.js)
  */
-export function setupTouchGestures(container, term, sendKeysFn) {
+export function setupTouchGestures(
+  container,
+  term,
+  { onScroll, getLineHeight, selection = NO_SELECTION },
+) {
   let touchStartY = null;
   let touchStartX = null;
-  let scrollAccumulator = 0;
-  let gestureDirection = null; // null | 'scroll' | 'swipe'
-  const PX_PER_LINE = 14;
+  // null | 'scroll' | 'swipe' | 'select' (long-press) | 'handle'
+  let gestureDirection = null;
   const SWIPE_THRESHOLD = 0.4;
   const DIRECTION_LOCK_PX = 10;
+  const LONG_PRESS_MS = 450;
+
+  let longPressTimer = null;
+  let activeHandle; // "start" | "end" while dragging a selection handle
+  let dismissSelection = false; // this touch should clear the selection
+
+  function cancelLongPress() {
+    clearTimeout(longPressTimer);
+    longPressTimer = null;
+  }
+
+  function startLongPress(x, y) {
+    longPressTimer = setTimeout(() => {
+      longPressTimer = null;
+      if (gestureDirection !== null || touchStartX === null) return;
+      gestureDirection = "select";
+      activeHandle = undefined;
+      dismissSelection = false;
+      selection.startAt(x, y);
+      navigator.vibrate?.(20);
+    }, LONG_PRESS_MS);
+  }
 
   let pinchStartDist = null;
   let pinchStartFontSize = null;
-
-  // RAF-based scroll flush (replaces throttle + drain timer)
-  let scrollRafId = null;
-
-  // Momentum state
-  const FRICTION = 0.94;
-  const MIN_VELOCITY = 0.3;
-  const VELOCITY_WINDOW = 4;
-  let velocitySamples = [];
-  let momentumRafId = null;
-  let momentumVelocity = 0;
   let stoppedMomentum = false;
+
+  const kinetic = createKineticScroller({ getLineHeight, onScroll });
 
   const swipeLeftEl = document.getElementById("swipe-left");
   const swipeRightEl = document.getElementById("swipe-right");
-
-  function flushScroll() {
-    const lines = Math.trunc(scrollAccumulator / PX_PER_LINE);
-    if (lines === 0) return;
-    scrollAccumulator -= lines * PX_PER_LINE;
-    const button = lines > 0 ? 65 : 64;
-    sendKeysFn(`\x1b[<${button};1;1M`.repeat(Math.abs(lines)));
-  }
-
-  function scheduleScrollFlush() {
-    if (scrollRafId === null) {
-      scrollRafId = requestAnimationFrame(() => {
-        scrollRafId = null;
-        flushScroll();
-      });
-    }
-  }
-
-  function cancelScrollFlush() {
-    if (scrollRafId !== null) {
-      cancelAnimationFrame(scrollRafId);
-      scrollRafId = null;
-    }
-  }
-
-  function cancelMomentum() {
-    if (momentumRafId !== null) {
-      cancelAnimationFrame(momentumRafId);
-      momentumRafId = null;
-    }
-    momentumVelocity = 0;
-  }
-
-  function computeReleaseVelocity() {
-    if (velocitySamples.length < 2) return 0;
-    const recent = velocitySamples.slice(-VELOCITY_WINDOW);
-    let totalDelta = 0;
-    let totalTime = 0;
-    for (let i = 1; i < recent.length; i++) {
-      totalDelta += recent[i].delta;
-      totalTime += recent[i].time - recent[i - 1].time;
-    }
-    if (totalTime === 0) return 0;
-    return totalDelta / totalTime; // px per ms
-  }
-
-  function startMomentum() {
-    const velocity = computeReleaseVelocity();
-    // Convert px/ms to px/frame (~16ms)
-    momentumVelocity = velocity * 16;
-    if (Math.abs(momentumVelocity) < MIN_VELOCITY) return;
-
-    function tick() {
-      momentumVelocity *= FRICTION;
-      if (Math.abs(momentumVelocity) < MIN_VELOCITY) {
-        momentumRafId = null;
-        flushScroll();
-        return;
-      }
-      scrollAccumulator += momentumVelocity;
-      flushScroll();
-      momentumRafId = requestAnimationFrame(tick);
-    }
-    momentumRafId = requestAnimationFrame(tick);
-  }
 
   container.addEventListener(
     "touchstart",
     (e) => {
       if (e.touches.length === 2) {
+        cancelLongPress();
         pinchStartDist = getTouchDistance(e.touches);
         pinchStartFontSize = term.options.fontSize;
         // Clear both axes: a leftover touchStartX made the final finger
@@ -117,19 +88,30 @@ export function setupTouchGestures(container, term, sendKeysFn) {
       }
       if (e.touches.length === 1) {
         // A touch that halts a coasting scroll is a "stop", not a tap
-        stoppedMomentum = momentumRafId !== null;
-        cancelMomentum();
-        cancelScrollFlush();
+        stoppedMomentum = kinetic.isCoasting();
+        kinetic.begin();
         touchStartY = e.touches[0].clientY;
         touchStartX = e.touches[0].clientX;
-        scrollAccumulator = 0;
         gestureDirection = null;
-        velocitySamples = [{ delta: 0, time: Date.now() }];
         // Blur so the already-focused textarea can't re-trigger the
         // keyboard during a gesture. Taps re-focus in touchend.
         term.blur();
         e.preventDefault();
         e.stopPropagation();
+
+        cancelLongPress();
+        dismissSelection = false;
+        if (selection.isActive()) {
+          const handle = selection.hitHandle(touchStartX, touchStartY);
+          if (handle) {
+            gestureDirection = "handle";
+            activeHandle = handle;
+            selection.grab(handle, touchStartX, touchStartY);
+            return;
+          }
+          dismissSelection = true; // tap or scroll elsewhere clears it
+        }
+        startLongPress(touchStartX, touchStartY);
       }
     },
     { capture: true, passive: false },
@@ -167,6 +149,11 @@ export function setupTouchGestures(container, term, sendKeysFn) {
       e.preventDefault();
       e.stopPropagation();
 
+      if (gestureDirection === "select" || gestureDirection === "handle") {
+        selection.dragTo(currentX, currentY, activeHandle);
+        return;
+      }
+
       if (gestureDirection === null) {
         if (
           Math.abs(deltaY) > DIRECTION_LOCK_PX ||
@@ -174,6 +161,11 @@ export function setupTouchGestures(container, term, sendKeysFn) {
         ) {
           gestureDirection =
             Math.abs(deltaX) > Math.abs(deltaY) * 1.5 ? "swipe" : "scroll";
+          cancelLongPress();
+          if (dismissSelection) {
+            selection.clear();
+            dismissSelection = false;
+          }
         } else {
           return;
         }
@@ -198,15 +190,7 @@ export function setupTouchGestures(container, term, sendKeysFn) {
       if (gestureDirection === "scroll") {
         const delta = touchStartY - currentY;
         touchStartY = currentY;
-        if (Math.abs(delta) < 1) return;
-
-        velocitySamples.push({ delta, time: Date.now() });
-        if (velocitySamples.length > VELOCITY_WINDOW + 1) {
-          velocitySamples.shift();
-        }
-
-        scrollAccumulator += delta;
-        scheduleScrollFlush();
+        if (delta !== 0) kinetic.move(delta);
       }
     },
     { capture: true, passive: false },
@@ -215,6 +199,16 @@ export function setupTouchGestures(container, term, sendKeysFn) {
   container.addEventListener(
     "touchend",
     (e) => {
+      cancelLongPress();
+      if (gestureDirection === "select" || gestureDirection === "handle") {
+        // Selection stays; the action bar takes it from here
+        e.preventDefault();
+        touchStartY = null;
+        touchStartX = null;
+        gestureDirection = null;
+        return;
+      }
+
       if (pinchStartDist !== null && e.touches.length < 2) {
         pinchStartDist = null;
         pinchStartFontSize = null;
@@ -236,17 +230,21 @@ export function setupTouchGestures(container, term, sendKeysFn) {
       }
 
       if (gestureDirection !== null) {
-        if (gestureDirection === "scroll") {
-          cancelScrollFlush();
-          flushScroll();
-          startMomentum();
-        }
+        if (gestureDirection === "scroll") kinetic.release();
         e.preventDefault();
       }
 
       // Tap (no gesture detected) → synthesize mouse events so xterm
       // handles focus/cursor and the click handler in main.js fires.
       if (
+        gestureDirection === null &&
+        touchStartX !== null &&
+        dismissSelection
+      ) {
+        // Tap outside the selection only dismisses it (no click/keyboard)
+        selection.clear();
+        dismissSelection = false;
+      } else if (
         gestureDirection === null &&
         touchStartX !== null &&
         !stoppedMomentum
@@ -274,7 +272,6 @@ export function setupTouchGestures(container, term, sendKeysFn) {
       touchStartY = null;
       touchStartX = null;
       gestureDirection = null;
-      velocitySamples = [];
     },
     { capture: true, passive: false },
   );
@@ -282,15 +279,13 @@ export function setupTouchGestures(container, term, sendKeysFn) {
   container.addEventListener(
     "touchcancel",
     () => {
-      cancelMomentum();
-      cancelScrollFlush();
+      kinetic.stop();
+      cancelLongPress();
       if (swipeLeftEl) swipeLeftEl.classList.remove("visible");
       if (swipeRightEl) swipeRightEl.classList.remove("visible");
       touchStartY = null;
       touchStartX = null;
-      scrollAccumulator = 0;
       gestureDirection = null;
-      velocitySamples = [];
       pinchStartDist = null;
       pinchStartFontSize = null;
       stoppedMomentum = false;

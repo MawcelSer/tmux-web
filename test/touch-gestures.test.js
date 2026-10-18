@@ -15,8 +15,9 @@ const pt = (clientX, clientY) => ({ clientX, clientY });
 describe("setupTouchGestures", () => {
   let container;
   let term;
-  let sendKeys;
+  let onScroll;
   let clicks;
+  let selection;
 
   beforeEach(() => {
     vi.useFakeTimers({
@@ -24,6 +25,7 @@ describe("setupTouchGestures", () => {
         "setTimeout",
         "clearTimeout",
         "Date",
+        "performance",
         "requestAnimationFrame",
         "cancelAnimationFrame",
       ],
@@ -31,10 +33,23 @@ describe("setupTouchGestures", () => {
     container = document.createElement("div");
     document.body.replaceChildren(container);
     term = { blur: vi.fn(), options: { fontSize: 14 } };
-    sendKeys = vi.fn();
+    onScroll = vi.fn();
     clicks = vi.fn();
     container.addEventListener("click", clicks);
-    setupTouchGestures(container, term, sendKeys);
+    selection = {
+      active: false,
+      isActive: vi.fn(() => selection.active),
+      startAt: vi.fn(() => (selection.active = true)),
+      dragTo: vi.fn(),
+      hitHandle: vi.fn(() => null),
+      grab: vi.fn(),
+      clear: vi.fn(() => (selection.active = false)),
+    };
+    setupTouchGestures(container, term, {
+      onScroll,
+      getLineHeight: () => 14,
+      selection,
+    });
   });
 
   afterEach(() => {
@@ -62,19 +77,19 @@ describe("setupTouchGestures", () => {
     expect(term.blur).toHaveBeenCalled();
   });
 
-  it("scrolls on vertical drag with mouse-wheel sequences and no click", () => {
+  it("scrolls on vertical drag (positive lines = newer output) and no click", () => {
     flick(500, 300);
     vi.advanceTimersByTime(16);
-    expect(sendKeys).toHaveBeenCalled();
-    expect(sendKeys.mock.calls[0][0]).toMatch(/^(\x1b\[<65;1;1M)+$/);
+    expect(onScroll).toHaveBeenCalled();
+    expect(onScroll.mock.calls[0][0]).toBeGreaterThan(0);
     expect(clicks).not.toHaveBeenCalled();
   });
 
   it("keeps scrolling with momentum after a fast flick", () => {
     flick(500, 260);
-    sendKeys.mockClear();
+    onScroll.mockClear();
     vi.advanceTimersByTime(100);
-    expect(sendKeys).toHaveBeenCalled();
+    expect(onScroll).toHaveBeenCalled();
   });
 
   it("a tap that stops momentum does not click (keyboard stays closed)", () => {
@@ -83,9 +98,9 @@ describe("setupTouchGestures", () => {
     tap();
     expect(clicks).not.toHaveBeenCalled();
 
-    sendKeys.mockClear();
+    onScroll.mockClear();
     vi.advanceTimersByTime(200);
-    expect(sendKeys).not.toHaveBeenCalled(); // momentum stopped
+    expect(onScroll).not.toHaveBeenCalled(); // momentum stopped
 
     tap(); // next tap after the coast is a normal tap
     expect(clicks).toHaveBeenCalledTimes(1);
@@ -129,11 +144,77 @@ describe("setupTouchGestures", () => {
     expect(clicks).toHaveBeenCalledTimes(1);
   });
 
+  describe("long-press selection", () => {
+    it("holding still selects at the finger, without a click or keyboard", () => {
+      fire(container, "touchstart", [pt(50, 60)]);
+      vi.advanceTimersByTime(500);
+      expect(selection.startAt).toHaveBeenCalledWith(50, 60);
+      fire(container, "touchend", [], [pt(50, 60)]);
+      expect(clicks).not.toHaveBeenCalled();
+    });
+
+    it("dragging after the long-press extends the selection, not scroll", () => {
+      fire(container, "touchstart", [pt(50, 60)]);
+      vi.advanceTimersByTime(500);
+      fire(container, "touchmove", [pt(120, 90)]);
+      vi.advanceTimersByTime(16);
+      expect(selection.dragTo).toHaveBeenCalledWith(120, 90, undefined);
+      expect(onScroll).not.toHaveBeenCalled();
+    });
+
+    it("moving before the delay scrolls instead (no selection)", () => {
+      fire(container, "touchstart", [pt(50, 300)]);
+      vi.advanceTimersByTime(100);
+      fire(container, "touchmove", [pt(50, 250)]);
+      vi.advanceTimersByTime(600);
+      expect(selection.startAt).not.toHaveBeenCalled();
+    });
+
+    it("a quick tap is still a tap", () => {
+      tap();
+      vi.advanceTimersByTime(600);
+      expect(selection.startAt).not.toHaveBeenCalled();
+      expect(clicks).toHaveBeenCalledTimes(1);
+    });
+
+    it("with a selection, a touch on a handle drags that handle", () => {
+      selection.active = true;
+      selection.hitHandle.mockReturnValue("start");
+      fire(container, "touchstart", [pt(30, 40)]);
+      fire(container, "touchmove", [pt(10, 40)]);
+      fire(container, "touchend", [], [pt(10, 40)]);
+      expect(selection.grab).toHaveBeenCalledWith("start", 30, 40);
+      expect(selection.dragTo).toHaveBeenCalledWith(10, 40, "start");
+      expect(selection.clear).not.toHaveBeenCalled();
+      expect(clicks).not.toHaveBeenCalled();
+    });
+
+    it("with a selection, tapping elsewhere clears it without a click", () => {
+      selection.active = true;
+      tap();
+      expect(selection.clear).toHaveBeenCalled();
+      expect(clicks).not.toHaveBeenCalled();
+    });
+
+    it("with a selection, starting to scroll clears it", () => {
+      selection.active = true;
+      flick(400, 200);
+      expect(selection.clear).toHaveBeenCalled();
+    });
+
+    it("pinching never starts a selection", () => {
+      fire(container, "touchstart", [pt(100, 100)]);
+      fire(container, "touchstart", [pt(100, 100), pt(200, 200)]);
+      vi.advanceTimersByTime(600);
+      expect(selection.startAt).not.toHaveBeenCalled();
+    });
+  });
+
   it("touchcancel stops momentum", () => {
     flick(500, 260);
     fire(container, "touchcancel", []);
-    sendKeys.mockClear();
+    onScroll.mockClear();
     vi.advanceTimersByTime(200);
-    expect(sendKeys).not.toHaveBeenCalled();
+    expect(onScroll).not.toHaveBeenCalled();
   });
 });
