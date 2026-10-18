@@ -14,6 +14,17 @@ export function isValidWindowIndex(idx) {
   return Number.isInteger(idx) && idx >= 0;
 }
 
+export const MAX_SCROLL_LINES = 1000;
+
+/** Lines to scroll: non-zero integer, positive = toward newer output. */
+export function isValidScroll(lines) {
+  return (
+    Number.isInteger(lines) &&
+    lines !== 0 &&
+    Math.abs(lines) <= MAX_SCROLL_LINES
+  );
+}
+
 export function isValidSize(cols, rows) {
   return (
     Number.isInteger(cols) &&

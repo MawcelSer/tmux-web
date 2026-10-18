@@ -325,3 +325,38 @@ describe("review follow-ups", () => {
     second.close();
   });
 });
+
+describe("scroll messages", () => {
+  it("scrolls the client's pane via tmux copy mode", async () => {
+    const tmuxExecFn = vi.fn(async (args) =>
+      args[0] === "list-clients"
+        ? "/dev/pts/8\t%2\t0\t0\t\t0\t0\t80\t24\ton\tbottom\n"
+        : "",
+    );
+    const base = await startServer({
+      createPtyFn: () => makePty({ tty: "/dev/pts/8" }),
+      tmuxExecFn,
+    });
+    const ws = await openWs(base, "main");
+    ws.send(JSON.stringify({ type: "scroll", lines: -4 }));
+    await wait(50);
+    expect(tmuxExecFn).toHaveBeenCalledWith(
+      expect.arrayContaining(["copy-mode", "-t", "%2", "-N", "4", "scroll-up"]),
+    );
+    ws.close();
+  });
+
+  it("ignores invalid scroll amounts and never writes them to the PTY", async () => {
+    const pty = makePty();
+    const tmuxExecFn = vi.fn().mockResolvedValue("");
+    const base = await startServer({ createPtyFn: () => pty, tmuxExecFn });
+    const ws = await openWs(base, "main");
+    for (const lines of [0, 1.5, "3", 100000, null]) {
+      ws.send(JSON.stringify({ type: "scroll", lines }));
+    }
+    await wait(50);
+    expect(tmuxExecFn).not.toHaveBeenCalled();
+    expect(pty.written).toEqual([]);
+    ws.close();
+  });
+});

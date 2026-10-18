@@ -7,11 +7,13 @@ import {
   runTmux as defaultRunTmux,
 } from "./tmux-api.js";
 import { createHttpHandler, URL_BASE } from "./http-routes.js";
+import { createScroller } from "./scroll.js";
 import {
   isValidName,
   isValidWindowIndex,
   isValidSize,
   isAllowedOrigin,
+  isValidScroll,
 } from "./validation.js";
 
 const MAX_SEND_BUF_BYTES = 1024 * 1024; // 1 MB cap to prevent OOM
@@ -114,6 +116,9 @@ export function createServer({
       case "resize":
         if (isValidSize(msg.cols, msg.rows))
           conn.pty.resize(msg.cols, msg.rows);
+        return;
+      case "scroll":
+        if (isValidScroll(msg.lines)) conn.scroller.add(msg.lines);
         return;
       case "switch": {
         if (!isValidName(msg.session)) return;
@@ -227,6 +232,12 @@ export function createServer({
       session: "",
       closed: false,
       switchQueue: Promise.resolve(),
+      scroller: createScroller({
+        getTty: () => pty.getTty?.() ?? null,
+        runTmux: tmuxExecFn,
+        writeInput: (data) => pty.write(data),
+        isClosed: () => conn.closed,
+      }),
     };
     claimSession(conn, session);
     pipePtyOutput(conn);
