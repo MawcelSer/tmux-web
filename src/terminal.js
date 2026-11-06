@@ -6,6 +6,7 @@ import { createConnection } from "./connection.js";
 import { setupTouchGestures } from "./touch-gestures.js";
 import { setupMobileInput } from "./mobile-input.js";
 import { setupCopyPaste } from "./copy-paste.js";
+import { setupWebglRenderer } from "./webgl-renderer.js";
 
 const THEME = {
   background: "#101b2c",
@@ -67,6 +68,7 @@ export function createTerminal(
   term.loadAddon(searchAddon);
 
   term.open(container);
+  const renderer = setupWebglRenderer(term);
 
   // Force mobile keyboard to lowercase mode
   const helperTextarea = container.querySelector(".xterm-helper-textarea");
@@ -90,7 +92,9 @@ export function createTerminal(
   connection.connect();
 
   function onVisibilityChange() {
-    if (document.visibilityState === "visible") connection.checkAlive();
+    if (document.visibilityState !== "visible") return;
+    renderer.restore(); // the GPU context may have been dropped meanwhile
+    connection.checkAlive();
   }
   document.addEventListener("visibilitychange", onVisibilityChange);
 

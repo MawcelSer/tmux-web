@@ -1,5 +1,10 @@
 import { describe, it, expect, vi } from "vitest";
-import { createScroller, CLIENT_FORMAT } from "../server/scroll.js";
+import {
+  createScroller,
+  CLIENT_FORMAT,
+  CLIENT_CACHE_MS,
+  PANE_STATE_FORMAT,
+} from "../server/scroll.js";
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
 
@@ -32,12 +37,28 @@ function clientLine({
   ].join("\t");
 }
 
+/** Pane state printed by the display-message that ends each scroll. */
+function paneState({ mouse = 0, inMode = 0, mode = "" } = {}) {
+  return `${mouse}\t${inMode}\t${mode}\n`;
+}
+
+const readState = (pane = "%3") => [
+  ";",
+  "display-message",
+  "-p",
+  "-t",
+  pane,
+  PANE_STATE_FORMAT,
+];
+
 function setup({ client = {}, closed = () => false } = {}) {
   const calls = [];
   let current = clientLine(client);
+  let state = paneState({ ...client, inMode: 1, mode: "copy-mode" });
+  let clock = 0;
   const runTmux = vi.fn(async (args) => {
     calls.push(args);
-    if (args[0] !== "list-clients") return "";
+    if (args[0] !== "list-clients") return state;
     // another client listed first: ours must be picked by tty
     return `${clientLine({ tty: "/dev/pts/99", pane: "%9", mouse: 1 })}\n${current}\n`;
   });
@@ -47,17 +68,27 @@ function setup({ client = {}, closed = () => false } = {}) {
     runTmux,
     writeInput,
     isClosed: closed,
+    now: () => clock,
   });
   return {
     scroller,
     runTmux,
     writeInput,
     calls,
-    setClient: (c) => (current = clientLine(c)),
+    // a changed client is only seen once the cached lookup has expired
+    setClient: (c, { expire = true } = {}) => {
+      current = clientLine(c);
+      if (expire) clock += CLIENT_CACHE_MS;
+    },
+    setPaneState: (s) => (state = paneState(s)),
+    setRawPaneState: (raw) => (state = raw),
+    advance: (ms) => (clock += ms),
   };
 }
 
 const scrollCalls = (calls) => calls.filter((c) => c[0] !== "list-clients");
+const lookups = (calls) => calls.filter((c) => c[0] === "list-clients");
+const lineCount = (call) => call[call.indexOf("-N") + 1];
 
 describe("createScroller", () => {
   it("queries clients with a tab-separated format (empty fields survive)", async () => {
@@ -85,6 +116,7 @@ describe("createScroller", () => {
       "-N",
       "7",
       "scroll-up",
+      ...readState(),
     ]);
   });
 
@@ -102,6 +134,7 @@ describe("createScroller", () => {
       "-N",
       "4",
       "scroll-down",
+      ...readState(),
     ]);
   });
 
@@ -191,6 +224,128 @@ describe("createScroller", () => {
     });
   });
 
+  describe("client lookup cache", () => {
+    it("reuses the lookup for scrolls in quick succession", async () => {
+      const { scroller, calls, advance } = setup();
+      scroller.add(-1);
+      await flush();
+      advance(CLIENT_CACHE_MS - 1);
+      scroller.add(-1);
+      await flush();
+      expect(lookups(calls)).toHaveLength(1);
+      expect(scrollCalls(calls)).toHaveLength(2);
+    });
+
+    it("looks the client up again once the cache expired", async () => {
+      const { scroller, calls, advance } = setup();
+      scroller.add(-1);
+      await flush();
+      advance(CLIENT_CACHE_MS);
+      scroller.add(-1);
+      await flush();
+      expect(lookups(calls)).toHaveLength(2);
+    });
+
+    it("knows it is in copy mode after scrolling up (no second copy-mode)", async () => {
+      const { scroller, calls } = setup();
+      scroller.add(-2);
+      await flush();
+      scroller.add(-2);
+      await flush();
+      expect(scrollCalls(calls)[1][0]).toBe("send-keys");
+    });
+
+    it("looks up again once copy mode exited at the bottom", async () => {
+      const { scroller, calls, setPaneState, setClient } = setup({
+        client: { inMode: 1, mode: "copy-mode" },
+      });
+      setPaneState({ inMode: 0 }); // scrolled back down to live output
+      scroller.add(3);
+      await flush();
+      setClient({}, { expire: false });
+      scroller.add(3); // live now: no stale scroll-down
+      await flush();
+      expect(scrollCalls(calls)).toHaveLength(1);
+      expect(lookups(calls)).toHaveLength(2);
+    });
+
+    it("never caches live output or mouse apps (nothing refreshes them)", async () => {
+      const { scroller, calls } = setup({ client: { mouse: 1 } });
+      scroller.add(-3);
+      await flush();
+      scroller.add(-3);
+      await flush();
+      expect(lookups(calls)).toHaveLength(2);
+    });
+
+    it("retries with a fresh lookup when the cached pane left copy mode", async () => {
+      const { scroller, calls, runTmux, setClient } = setup();
+      scroller.add(-1);
+      await flush();
+      setClient({}, { expire: false }); // q pressed: live again
+      runTmux.mockRejectedValueOnce(new Error("not in a mode"));
+      scroller.add(-2);
+      await flush();
+      await flush();
+      const last = scrollCalls(calls).at(-1);
+      expect(last[0]).toBe("copy-mode"); // re-entered, step not lost
+      expect(lineCount(last)).toBe("2");
+      expect(lookups(calls)).toHaveLength(2);
+    });
+
+    it("a lookup in flight during a switch does not refill the cache", async () => {
+      const { scroller, calls, runTmux } = setup();
+      let release;
+      runTmux.mockImplementationOnce(async (args) => {
+        calls.push(args);
+        await new Promise((r) => (release = r));
+        return clientLine({ tty: "/dev/pts/4", inMode: 1, mode: "copy-mode" });
+      });
+      scroller.add(-1);
+      await flush();
+      scroller.invalidate(); // switch-client finished meanwhile
+      release();
+      await flush();
+      await flush();
+      scroller.add(-1);
+      await flush();
+      expect(lookups(calls)).toHaveLength(2);
+    });
+
+    it("looks the client up again when the state can't be read", async () => {
+      const { scroller, calls, setRawPaneState } = setup();
+      setRawPaneState("");
+      scroller.add(-1);
+      await flush();
+      scroller.add(-1);
+      await flush();
+      expect(lookups(calls)).toHaveLength(2);
+    });
+
+    it("forgets the client when told to (session/window switch)", async () => {
+      const { scroller, calls } = setup();
+      scroller.add(-1);
+      await flush();
+      scroller.invalidate();
+      scroller.add(-1);
+      await flush();
+      expect(lookups(calls)).toHaveLength(2);
+    });
+
+    it("forgets the client after a tmux error", async () => {
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      const { scroller, calls, runTmux } = setup();
+      scroller.add(-1);
+      await flush();
+      runTmux.mockRejectedValueOnce(new Error("can't find pane: %3"));
+      scroller.add(-1);
+      await flush();
+      scroller.add(-1);
+      await flush();
+      expect(lookups(calls)).toHaveLength(2);
+    });
+  });
+
   it("caps the merged scroll so a message flood can't stall tmux", async () => {
     let release;
     const gate = new Promise((r) => (release = r));
@@ -212,7 +367,7 @@ describe("createScroller", () => {
     release();
     await flush();
     await flush();
-    const counts = scrollCalls(calls).map((c) => Number(c.at(-2)));
+    const counts = scrollCalls(calls).map((c) => Number(lineCount(c)));
     expect(Math.max(...counts)).toBeLessThanOrEqual(1000);
   });
 
@@ -238,7 +393,7 @@ describe("createScroller", () => {
     release();
     await flush();
     await flush();
-    expect(scrollCalls(calls).map((c) => c.at(-2))).toEqual(["1", "5"]);
+    expect(scrollCalls(calls).map(lineCount)).toEqual(["1", "5"]);
   });
 
   it("stops once the connection is closed", async () => {

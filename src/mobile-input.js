@@ -25,6 +25,14 @@ const MODIFIER_KEYCODES = new Set([16, 17, 18]);
 const PASTE_INPUT_TYPES = new Set(["insertFromPaste", "insertFromDrop"]);
 // Control characters and DEL: input that edits or moves outside the textarea
 const CONTROL_DATA_RE = /[\x00-\x1f\x7f]/;
+const PUNCTUATION_START_RE = /^[^\s\p{L}\p{N}]/u;
+const WHITESPACE_RE = /\s/;
+/**
+ * SwiftKey's space removal before punctuation can arrive as two edits
+ * (delete the space, then insert the punctuation): a deleted trailing space
+ * waits this long for the second half before it is sent as a backspace.
+ */
+export const SPACE_GUARD_MS = 50;
 
 /**
  * Edit that turns `oldValue` into `newValue` for a terminal whose cursor sits
@@ -41,6 +49,26 @@ export function computeEdit(oldValue, newValue) {
     deleteCount: oldChars.length - common,
     insert: newChars.slice(common).join(""),
   };
+}
+
+/**
+ * Smart punctuation (SwiftKey) turns "cd ." into "cd." — wrong in a shell,
+ * and the space already reached the terminal. If `newValue` is `oldValue`
+ * with its trailing space swapped for punctuation, returns `oldValue` plus
+ * that punctuation (minus the keyboard's auto-space after it); else null.
+ */
+export function keepTrailingSpace(oldValue, newValue) {
+  if (!oldValue.endsWith(" ")) return null;
+  const base = oldValue.slice(0, -1);
+  if (!newValue.startsWith(base) || newValue.startsWith(oldValue)) return null;
+  const punctuation = newValue.slice(base.length).trimEnd();
+  if (
+    !PUNCTUATION_START_RE.test(punctuation) ||
+    WHITESPACE_RE.test(punctuation)
+  ) {
+    return null;
+  }
+  return oldValue + punctuation;
 }
 
 function hasXtermInternals(term, core, compHelper) {
@@ -128,6 +156,21 @@ export function setupMobileInput(term) {
     if (insert) send(insert.replace(/\n/g, "\r"));
   }
 
+  /** The keyboard deleted only the trailing space (first half of a swap?) */
+  function isTrailingSpaceDeletion(value) {
+    return synced.endsWith(" ") && value === synced.slice(0, -1);
+  }
+
+  /** Mirror `value`, keeping a trailing space the keyboard tried to eat. */
+  function applyKeyboardValue(value) {
+    const kept = keepTrailingSpace(synced, value);
+    if (kept !== null) {
+      textarea.value = kept;
+      textarea.setSelectionRange(kept.length, kept.length);
+    }
+    applyEdit(synced, kept ?? value);
+  }
+
   function maybeReset() {
     if (!compHelper._isComposing && needsReset(textarea.value)) writeContext();
   }
@@ -135,16 +178,23 @@ export function setupMobileInput(term) {
   /**
    * Mirror the textarea onto the terminal line. Skipped mid-composition
    * unless forced (toolbar key while a word is still being composed).
+   * `awaitPunctuation`: hold back a lone trailing-space deletion for
+   * SPACE_GUARD_MS (only for IME input — a key must never wait).
    */
-  function sync(force = false) {
+  function sync(force = false, awaitPunctuation = false) {
     clearSyncTimer();
     if (compHelper._isComposing && !force) return;
-    if (textarea.value !== synced) applyEdit(synced, textarea.value);
+    const value = textarea.value;
+    if (awaitPunctuation && isTrailingSpaceDeletion(value)) {
+      syncTimer = setTimeout(sync, SPACE_GUARD_MS);
+      return;
+    }
+    if (value !== synced) applyKeyboardValue(value);
     maybeReset();
   }
 
   function scheduleSync() {
-    if (syncTimer === null) syncTimer = setTimeout(sync, 0);
+    if (syncTimer === null) syncTimer = setTimeout(() => sync(false, true), 0);
   }
 
   function resetContext() {
@@ -223,7 +273,10 @@ export function setupMobileInput(term) {
   // Paste with nothing inserted (e.g. an image) still leaves the value
   // cleared by xterm — restore the context once the paste settled
   textarea.addEventListener("paste", () => setTimeout(maybeReset, 0));
-  textarea.addEventListener("focus", maybeReset);
+  textarea.addEventListener("focus", () => {
+    if (syncTimer !== null) sync(); // a held-back backspace must not be lost
+    maybeReset();
+  });
 
   writeContext();
 

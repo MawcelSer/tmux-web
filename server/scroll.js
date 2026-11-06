@@ -14,6 +14,12 @@ const WHEEL_DOWN = 65;
 // One merged tmux call never scrolls more than this (flood protection)
 const MAX_PENDING_LINES = 1000;
 const SCROLLABLE_MODES = new Set(["copy-mode", "view-mode"]);
+// While the pane is in copy mode, the client → pane lookup is reused this
+// long, so a scroll step costs one tmux process instead of two. Short enough
+// that switching panes with the tmux prefix and scrolling right away still
+// lands on the new pane. Other states (live output, mouse apps) are always
+// looked up fresh: nothing refreshes them between scrolls.
+export const CLIENT_CACHE_MS = 500;
 
 // Tab-separated: pane_mode is empty outside a mode, so spaces won't do
 export const CLIENT_FORMAT = [
@@ -29,6 +35,11 @@ export const CLIENT_FORMAT = [
   "#{status}",
   "#{status-position}",
 ].join("\t");
+
+// Printed after each copy-mode scroll, so the cached mode stays exact
+// (copy-mode -e exits by itself at the bottom)
+export const PANE_STATE_FORMAT =
+  "#{mouse_any_flag}\t#{pane_in_mode}\t#{pane_mode}";
 
 const clamp = (v, max) => Math.max(-max, Math.min(max, v));
 
@@ -58,24 +69,40 @@ function parseClientLine(line) {
   };
 }
 
+/** Client with the pane state from PANE_STATE_FORMAT, or null if unreadable. */
+function withPaneState(client, output) {
+  const fields = output.trim().split("\t");
+  if (fields.length < 2) return null;
+  const [mouse, inMode, mode = ""] = fields;
+  return { ...client, mouseAware: mouse === "1", inMode: inMode === "1", mode };
+}
+
 /**
  * @param {object} deps
  * @param {() => string | null} deps.getTty - tty of this connection's client
  * @param {(args: string[]) => Promise<string>} deps.runTmux
  * @param {(data: string) => void} deps.writeInput - write to the client PTY
  * @param {() => boolean} [deps.isClosed]
- * @returns {{ add: (lines: number) => void }} positive = toward newer output
+ * @param {() => number} [deps.now]
+ * @returns {{ add: (lines: number) => void, invalidate: () => void }}
+ *   add: positive = toward newer output. invalidate: forget the cached
+ *   client (call after switching its session/window).
  */
 export function createScroller({
   getTty,
   runTmux,
   writeInput,
   isClosed = () => false,
+  now = () => Date.now(),
 }) {
   let pending = 0;
   let busy = false;
   let appRemainder = 0;
   let appPane = null;
+  let cached = null; // { tty, client, at }
+  // Bumped by invalidate(): a lookup that started earlier must not refill
+  // the cache with the pane shown before a session/window switch
+  let generation = 0;
 
   /**
    * The client's current pane. `display-message -c <tty>` does NOT target the
@@ -86,6 +113,34 @@ export function createScroller({
     const out = await runTmux(["list-clients", "-F", CLIENT_FORMAT]);
     const line = out.split("\n").find((l) => l.split("\t")[0] === tty);
     return line ? parseClientLine(line) : null;
+  }
+
+  function invalidate() {
+    cached = null;
+    generation += 1;
+  }
+
+  /** The cached client, if fresh and in a mode its scrolls keep up to date. */
+  function cachedClient(tty) {
+    if (!cached || cached.tty !== tty) return null;
+    if (now() - cached.at >= CLIENT_CACHE_MS) return null;
+    const { client } = cached;
+    return client.inMode && SCROLLABLE_MODES.has(client.mode) ? client : null;
+  }
+
+  async function lookUpClient(tty) {
+    const startedIn = generation;
+    const t = now();
+    const client = await findClient(tty);
+    if (generation === startedIn) {
+      cached = client ? { tty, client, at: t } : null;
+    }
+    return client;
+  }
+
+  function updateCachedClient(client, startedIn) {
+    if (!cached || generation !== startedIn) return;
+    cached = client ? { ...cached, client } : null;
   }
 
   // tmux routes mouse events by position, so aim at the pane's centre:
@@ -117,20 +172,52 @@ export function createScroller({
       String(Math.abs(lines)),
       lines < 0 ? "scroll-up" : "scroll-down",
     ];
+    const readState = [
+      ";",
+      "display-message",
+      "-p",
+      "-t",
+      client.paneId,
+      PANE_STATE_FORMAT,
+    ];
+    const startedIn = generation;
     // -e: leave copy mode automatically when scrolled back to the bottom
-    await runTmux(
+    const out = await runTmux(
       client.inMode
-        ? scroll
-        : ["copy-mode", "-e", "-t", client.paneId, ";", ...scroll],
+        ? [...scroll, ...readState]
+        : [
+            "copy-mode",
+            "-e",
+            "-t",
+            client.paneId,
+            ";",
+            ...scroll,
+            ...readState,
+          ],
     );
+    updateCachedClient(withPaneState(client, out), startedIn);
   }
 
   async function scrollOnce(lines) {
     const tty = getTty();
     if (!tty) return;
-    const client = await findClient(tty);
+    const fromCache = cachedClient(tty);
+    if (fromCache) {
+      try {
+        await scrollClient(fromCache, lines);
+        return;
+      } catch {
+        // Stale cache (e.g. copy mode was left with q meanwhile): retry with
+        // a fresh lookup below; if that fails too, drain logs the error
+        invalidate();
+      }
+    }
+    const client = await lookUpClient(tty);
     if (!client || isClosed()) return; // not attached (yet / any more)
+    await scrollClient(client, lines);
+  }
 
+  async function scrollClient(client, lines) {
     // Same routing as tmux's default WheelUpPane binding
     if (!client.inMode && client.mouseAware) {
       forwardWheelToApp(client, lines);
@@ -150,6 +237,7 @@ export function createScroller({
         try {
           await scrollOnce(lines);
         } catch (err) {
+          invalidate(); // pane or mode may have changed under us
           console.error("tmux scroll failed:", err.message);
         }
       }
@@ -165,5 +253,6 @@ export function createScroller({
       pending = clamp(pending + lines, MAX_PENDING_LINES);
       if (!busy) drain();
     },
+    invalidate,
   };
 }

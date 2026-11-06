@@ -7,18 +7,18 @@
  */
 
 // Decay time constant: the coast covers ≈ coast velocity × TAU
-const TAU_MS = 600;
+const TAU_MS = 750;
 // Release velocity is measured over the last part of the drag only
 const VELOCITY_WINDOW_MS = 100;
 // Finger held still longer than this before lifting → no throw
 const MAX_RELEASE_AGE_MS = 60;
-const MIN_THROW_VELOCITY = 0.3; // px/ms — slower releases don't coast
+const MIN_THROW_VELOCITY = 0.25; // px/ms — slower releases don't coast
 const STOP_VELOCITY = 0.1; // px/ms — coasting ends below this
 const MAX_FINGER_VELOCITY = 6; // px/ms — guards against glitchy samples
 const MAX_COAST_VELOCITY = 20; // px/ms — ≈ 600 lines per throw at most
 // Fling gain grows with speed: gentle flicks stay controllable, fast or
 // repeated flicks travel far (coast = v × (1 + |v| / GAIN_REF))
-const GAIN_REF = 1; // px/ms
+const GAIN_REF = 0.8; // px/ms
 
 const clamp = (v, max) => Math.max(-max, Math.min(max, v));
 

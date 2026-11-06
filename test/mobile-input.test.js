@@ -3,7 +3,9 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   setupMobileInput,
   computeEdit,
+  keepTrailingSpace,
   CONTEXT_PREFIX,
+  SPACE_GUARD_MS,
 } from "../src/mobile-input.js";
 
 /** Minimal stand-in for the xterm internals the module patches. */
@@ -61,6 +63,26 @@ describe("computeEdit", () => {
       deleteCount: 0,
       insert: "c",
     });
+  });
+});
+
+describe("keepTrailingSpace", () => {
+  it("puts back a space swapped for punctuation", () => {
+    expect(keepTrailingSpace(", cd ", ", cd.")).toBe(", cd .");
+    expect(keepTrailingSpace(", cd ", ", cd?!")).toBe(", cd ?!");
+  });
+
+  it("drops the keyboard's auto-space after the punctuation", () => {
+    expect(keepTrailingSpace(", cd ", ", cd. ")).toBe(", cd .");
+  });
+
+  it("leaves every other edit alone", () => {
+    expect(keepTrailingSpace(", cd", ", cd.")).toBeNull(); // no space
+    expect(keepTrailingSpace(", cd ", ", cd .")).toBeNull(); // space kept
+    expect(keepTrailingSpace(", cd ", ", cdx")).toBeNull(); // a letter
+    expect(keepTrailingSpace(", cd ", ", cd")).toBeNull(); // only deleted
+    expect(keepTrailingSpace(", cd ", ", cd. x")).toBeNull(); // more text
+    expect(keepTrailingSpace(", cd ", ", ls.")).toBeNull(); // other word
   });
 });
 
@@ -152,12 +174,72 @@ describe("setupMobileInput", () => {
     expect(lineFrom(env.sent)).toBe("git commit");
   });
 
-  it("handles SwiftKey's delete-then-insert for punctuation", () => {
-    compose([P + "word"]);
-    edit(P + "word "); // auto-space
-    edit(P + "word", "deleteContentBackward");
-    edit(P + "word. ");
-    expect(lineFrom(env.sent)).toBe("word. ");
+  describe("smart punctuation (SwiftKey eats the space before '.')", () => {
+    it("keeps the space: cd .. stays cd ..", () => {
+      compose([P + "cd"]);
+      edit(P + "cd ");
+      edit(P + "cd."); // the space swapped for "."
+      edit(P + "cd .."); // the keyboard re-read the field
+      expect(lineFrom(env.sent)).toBe("cd ..");
+    });
+
+    it("never sends a DEL for the swap", () => {
+      compose([P + "cd"]);
+      edit(P + "cd ");
+      env.sent.length = 0;
+      edit(P + "cd.");
+      expect(env.sent).toEqual(["."]);
+      expect(env.textarea.value).toBe(P + "cd .");
+      expect(env.textarea.selectionStart).toBe((P + "cd .").length);
+    });
+
+    it("handles the swap arriving as delete-then-insert", () => {
+      compose([P + "cd"]);
+      edit(P + "cd ");
+      edit(P + "cd", "deleteContentBackward");
+      edit(P + "cd. "); // with the keyboard's auto-space
+      vi.advanceTimersByTime(SPACE_GUARD_MS);
+      expect(lineFrom(env.sent)).toBe("cd .");
+      expect(env.textarea.value).toBe(P + "cd .");
+    });
+
+    it("still sends a real backspace on the space after a short wait", () => {
+      compose([P + "cd"]);
+      edit(P + "cd ");
+      edit(P + "cd", "deleteContentBackward");
+      expect(lineFrom(env.sent)).toBe("cd "); // waiting for punctuation
+      vi.advanceTimersByTime(SPACE_GUARD_MS);
+      expect(lineFrom(env.sent)).toBe("cd");
+    });
+
+    it("a key pressed meanwhile sends the backspace first (order kept)", () => {
+      compose([P + "cd"]);
+      edit(P + "cd ");
+      edit(P + "cd", "deleteContentBackward");
+      env.compHelper.keydown({ keyCode: 13 }); // Enter
+      expect(env.sent.at(-1)).toBe("\x7f");
+    });
+
+    it("focus while a backspace is held back still sends it", () => {
+      edit(P.slice(0, -1), "deleteContentBackward"); // eats the prefix
+      env.textarea.dispatchEvent(new FocusEvent("focus"));
+      expect(env.sent).toEqual(["\x7f"]);
+      expect(env.textarea.value).toBe(P);
+    });
+
+    it("typing '.' at the start of a line deletes nothing", () => {
+      edit(",."); // the prefix's space swapped for "."
+      expect(env.sent).toEqual(["."]);
+    });
+
+    it("applies after a suggestion's auto-space too", () => {
+      compose([P + "word"]);
+      edit(P + "word "); // auto-space
+      edit(P + "word", "deleteContentBackward");
+      edit(P + "word. ");
+      vi.advanceTimersByTime(SPACE_GUARD_MS);
+      expect(lineFrom(env.sent)).toBe("word .");
+    });
   });
 
   it("edits in the middle (cursor moved with the space bar) stay correct", () => {
@@ -171,6 +253,7 @@ describe("setupMobileInput", () => {
 
   it("backspace that eats the prefix sends one DEL and restores it", () => {
     edit(P.slice(0, -1), "deleteContentBackward");
+    vi.advanceTimersByTime(SPACE_GUARD_MS);
     expect(env.sent).toEqual(["\x7f"]);
     expect(env.textarea.value).toBe(P);
   });

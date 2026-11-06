@@ -129,6 +129,7 @@ export function createServer({
         conn.switchQueue = conn.switchQueue
           .then(() => switchClient(conn, target))
           .then((ok) => {
+            conn.scroller.invalidate(); // the client now shows another pane
             if (ok && !conn.closed) claimSession(conn, msg.session);
           });
         return;
